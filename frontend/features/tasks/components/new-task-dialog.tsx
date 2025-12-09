@@ -1,0 +1,294 @@
+"use client";
+
+import { useState } from "react";
+import { format } from "date-fns";
+
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
+import type { Subject, Task, RecurrencePattern } from "@/lib/types";
+import { useCreateTask } from "@/features/tasks/hooks";
+import { toast } from "@/components/ui/use-toast";
+import { RecurrenceSelector } from "./recurrence-selector";
+
+const priorities: Task["priority"][] = ["low", "medium", "high", "critical"];
+
+interface NewTaskDialogProps {
+  readonly subjects: Subject[];
+}
+
+export function NewTaskDialog({ subjects }: NewTaskDialogProps) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({
+    title: "",
+    subject_id: undefined as number | undefined,
+    priority: "medium" as Task["priority"],
+    estimated_minutes: 60,
+    deadline: format(new Date(Date.now() + 86400000), "yyyy-MM-dd"),
+    deadline_time: "",
+    description: ""
+  });
+  const [useSpecificTime, setUseSpecificTime] = useState(false);
+  const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern | null>(null);
+  const [recurrenceEndDate, setRecurrenceEndDate] = useState<string | null>(null);
+  const createTask = useCreateTask();
+
+  const handleSubmit = () => {
+    // Combine date and time if time is specified
+    let deadline: string | undefined = undefined;
+    if (form.deadline) {
+      // Parse date components
+      const [year, month, day] = form.deadline.split('-').map(Number);
+      
+      if (useSpecificTime && form.deadline_time) {
+        // Combine date and time in user's local timezone
+        const [hours, minutes] = form.deadline_time.split(':').map(Number);
+        const dateObj = new Date();
+        dateObj.setFullYear(year, month - 1, day);
+        dateObj.setHours(hours, minutes, 0, 0);
+        deadline = dateObj.toISOString();
+      } else {
+        // Date only - default to end of day (23:59) in user's local timezone
+        const dateObj = new Date();
+        dateObj.setFullYear(year, month - 1, day);
+        dateObj.setHours(23, 59, 0, 0);
+        deadline = dateObj.toISOString();
+      }
+    }
+    const endDate = recurrenceEndDate ? new Date(recurrenceEndDate).toISOString() : undefined;
+    
+    // Prepare payload
+    const payload: any = {
+      ...form,
+      deadline,
+    };
+    
+    // Only include recurrence fields if pattern exists
+    if (recurrencePattern) {
+      payload.is_recurring_template = true;
+      payload.recurrence_pattern = recurrencePattern;
+      if (endDate) {
+        payload.recurrence_end_date = endDate;
+      }
+    }
+    
+    console.log("Creating task with payload:", payload);
+    
+    createTask.mutate(
+      payload,
+      {
+        onSuccess: () => {
+          toast({ 
+            title: recurrencePattern ? "Recurring task created" : "Task added",
+            description: recurrencePattern ? "Instances will be generated automatically" : undefined
+          });
+          setOpen(false);
+          setForm({
+            title: "",
+            subject_id: undefined,
+            priority: "medium",
+            estimated_minutes: 60,
+            deadline: format(new Date(Date.now() + 86400000), "yyyy-MM-dd"),
+            deadline_time: "",
+            description: ""
+          });
+          setUseSpecificTime(false);
+          setRecurrencePattern(null);
+          setRecurrenceEndDate(null);
+        },
+        onError: (error: any) => {
+          console.error("Error creating task:", error);
+          const errorMessage = error?.response?.data?.detail || error?.message || "Please try again";
+          const errorText = typeof errorMessage === "string" ? errorMessage : JSON.stringify(errorMessage);
+          toast({
+            title: "Failed to create task",
+            description: errorText
+          });
+        }
+      }
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline">Add task</Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>New task</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Title</Label>
+            <Input
+              value={form.title}
+              onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Subject</Label>
+              <Select
+                value={form.subject_id ? String(form.subject_id) : "general"}
+                onValueChange={(value) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    subject_id: value === "general" ? undefined : Number(value)
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="General" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="general">General</SelectItem>
+                  {subjects.map((subject) => (
+                    <SelectItem key={subject.id} value={String(subject.id)}>
+                      {subject.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Priority</Label>
+              <Select
+                value={form.priority}
+                onValueChange={(value: Task["priority"]) =>
+                  setForm((prev) => ({ ...prev, priority: value }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {priorities.map((priority) => (
+                    <SelectItem key={priority} value={priority}>
+                      {priority}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Estimated minutes</Label>
+              <Input
+                type="number"
+                min={15}
+                step={15}
+                value={form.estimated_minutes}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    estimated_minutes: Number(event.target.value)
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-1">
+                <Label>
+                  Deadline
+                  {recurrencePattern && (
+                    <span className="text-xs text-muted-foreground ml-2">
+                      (First instance due date)
+                    </span>
+                  )}
+                </Label>
+                {recurrencePattern && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="max-w-xs">
+                          For recurring tasks, this is the deadline for the first instance. 
+                          Future instances will be calculated based on your recurrence pattern.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
+              <Input
+                type="date"
+                value={form.deadline}
+                onChange={(event) => setForm((prev) => ({ ...prev, deadline: event.target.value }))}
+              />
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="use-specific-time"
+                  checked={useSpecificTime}
+                  onCheckedChange={(checked) => setUseSpecificTime(checked === true)}
+                />
+                <Label htmlFor="use-specific-time" className="text-sm font-normal cursor-pointer">
+                  Set specific time
+                </Label>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="max-w-xs">
+                        If unchecked, deadline defaults to 11:59 PM on the selected date. 
+                        Check this to set a specific time (e.g., 2:00 PM for an afternoon deadline).
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+              {useSpecificTime && (
+                <Input
+                  type="time"
+                  value={form.deadline_time}
+                  onChange={(event) => setForm((prev) => ({ ...prev, deadline_time: event.target.value }))}
+                  className="mt-2"
+                />
+              )}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Description</Label>
+            <Textarea
+              value={form.description}
+              onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
+              placeholder="What does success look like?"
+            />
+          </div>
+          <RecurrenceSelector
+            value={recurrencePattern}
+            onChange={setRecurrencePattern}
+            endDate={recurrenceEndDate}
+            onEndDateChange={setRecurrenceEndDate}
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSubmit} disabled={createTask.isPending || !form.title.trim()}>
+              Create task
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+

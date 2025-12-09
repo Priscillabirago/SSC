@@ -1,47 +1,33 @@
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-
-# Python cache files
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
+.pytest_cache/
+.venv/
 
-# Flask instance folder
-instance/
+# Node
+node_modules/
+.next/
+out/
 
-# Virtual environment
-venv/
-env/
-ENV/
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-*.egg
-
-# Log files
+# Env & logs
+.env*
 *.log
 
-# OS generated files
+# Compiled
+dist/
+build/
+
+# IDE
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Environment variables
-.env
-.flaskenv
-
-# IDE specific files
 .idea/
 .vscode/
-*.swp
-*.swo 
+
+env/backend.env
+env/frontend.env
+.env.example
+.env.example
+/.pip
+smart_study_companion.db
+/.npm-cache
+/.poetry
+/frontend/.npm-cache
