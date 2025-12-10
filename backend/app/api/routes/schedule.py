@@ -470,12 +470,18 @@ def _update_task_completion_status(db: Session, task: Task, total_time: int, est
         if not task.is_completed:
             task.is_completed = True
             task.status = "completed"
+            # Set completed_at when marking as complete
+            if not task.completed_at:
+                from datetime import datetime, timezone
+                task.completed_at = datetime.now(timezone.utc)
             _handle_recurring_task_completion(db, task)
     elif task.is_completed and total_time < estimated_minutes:
         from app.models.task import TaskStatus
         if task.status == "completed" or task.status == TaskStatus.COMPLETED.value:
             task.is_completed = False
             task.status = TaskStatus.TODO.value
+            # Clear completed_at when unmarking as complete
+            task.completed_at = None
 
 
 def _update_task_progress_from_session(

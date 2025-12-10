@@ -43,38 +43,43 @@ export function MicroPlanWidget() {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex items-center gap-2">
-          <Input
-            type="number"
-            min={15}
-            max={180}
-            step={5}
-            value={minutes}
-            onChange={(event) => setMinutes(Number(event.target.value))}
-          />
+          <div className="flex-1">
+            <Input
+              type="number"
+              min={15}
+              max={180}
+              step={5}
+              value={minutes}
+              onChange={(event) => setMinutes(Number(event.target.value))}
+              placeholder="60"
+              className="h-9"
+            />
+          </div>
           <Button
             onClick={() => microPlan.mutate(minutes)}
             disabled={microPlan.isPending || minutes < 15}
+            className="h-9"
           >
-            {microPlan.isPending ? "Planning..." : "Plan my sprint"}
+            {microPlan.isPending ? "Planning..." : "Plan sprint"}
           </Button>
         </div>
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           {plan.map((session) => (
             <div
               key={session.id}
-              className="rounded-xl border border-border/60 bg-white/70 px-4 py-3"
+              className="rounded-lg border border-border/50 bg-white/60 px-3.5 py-2.5 hover:bg-white/80 transition-colors"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between mb-1.5">
                 <p className="text-sm font-semibold text-foreground">{session.generated_by}</p>
-                <Badge variant="outline">
+                <Badge variant="outline" className="text-xs h-5 px-2">
                   {formatTime(session.start_time)} – {formatTime(session.end_time)}
                 </Badge>
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">{session.focus}</p>
+              <p className="text-xs text-muted-foreground leading-relaxed">{session.focus}</p>
             </div>
           ))}
           {plan.length === 0 && (
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-muted-foreground text-center py-4">
               Launch a micro plan when you&apos;re ready to focus.
             </p>
           )}

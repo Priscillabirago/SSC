@@ -65,59 +65,65 @@ def list_tasks(
     from datetime import datetime, timezone
     
     # Clean up orphaned instances (instances pointing to non-recurring templates)
-    # Find all instances with a recurring_template_id
-    all_instances = (
-        db.query(Task)
-        .filter(
-            Task.user_id == current_user.id,
-            Task.recurring_template_id.isnot(None),
-            Task.is_recurring_template.is_(False),
-        )
-        .all()
-    )
-    
-    # Find which templates are no longer recurring
-    if all_instances:
-        template_ids_to_check = {inst.recurring_template_id for inst in all_instances if inst.recurring_template_id}
-        non_recurring_templates = (
+    # This runs on every request to ensure data consistency, but only processes if orphaned instances exist
+    try:
+        all_instances = (
             db.query(Task)
             .filter(
-                Task.id.in_(template_ids_to_check),
                 Task.user_id == current_user.id,
+                Task.recurring_template_id.isnot(None),
                 Task.is_recurring_template.is_(False),
             )
             .all()
         )
         
-        template_ids_to_clear = {t.id for t in non_recurring_templates}
-        if template_ids_to_clear:
-            # Get future uncompleted instances before clearing the link
-            now = datetime.now(timezone.utc)
-            future_instances_to_delete = (
-                db.query(Task)
-                .filter(
-                    Task.user_id == current_user.id,
-                    Task.recurring_template_id.in_(template_ids_to_clear),
-                    Task.is_completed.is_(False),
-                    (Task.deadline.is_(None) | (Task.deadline.isnot(None) & (Task.deadline > now))),
+        # Find which templates are no longer recurring
+        if all_instances:
+            template_ids_to_check = {inst.recurring_template_id for inst in all_instances if inst.recurring_template_id}
+            if template_ids_to_check:
+                non_recurring_templates = (
+                    db.query(Task)
+                    .filter(
+                        Task.id.in_(template_ids_to_check),
+                        Task.user_id == current_user.id,
+                        Task.is_recurring_template.is_(False),
+                    )
+                    .all()
                 )
-                .all()
-            )
-            
-            # Delete future instances
-            for instance in future_instances_to_delete:
-                db.delete(instance)
-            
-            # Clear recurring_template_id from remaining instances
-            (
-                db.query(Task)
-                .filter(
-                    Task.user_id == current_user.id,
-                    Task.recurring_template_id.in_(template_ids_to_clear),
-                )
-                .update({Task.recurring_template_id: None}, synchronize_session=False)
-            )
-            db.commit()
+                
+                template_ids_to_clear = {t.id for t in non_recurring_templates}
+                if template_ids_to_clear:
+                    # Get future uncompleted instances before clearing the link
+                    now = datetime.now(timezone.utc)
+                    future_instances_to_delete = (
+                        db.query(Task)
+                        .filter(
+                            Task.user_id == current_user.id,
+                            Task.recurring_template_id.in_(template_ids_to_clear),
+                            Task.is_completed.is_(False),
+                            (Task.deadline.is_(None) | (Task.deadline.isnot(None) & (Task.deadline > now))),
+                        )
+                        .all()
+                    )
+                    
+                    # Delete future instances
+                    for instance in future_instances_to_delete:
+                        db.delete(instance)
+                    
+                    # Clear recurring_template_id from remaining instances
+                    (
+                        db.query(Task)
+                        .filter(
+                            Task.user_id == current_user.id,
+                            Task.recurring_template_id.in_(template_ids_to_clear),
+                        )
+                        .update({Task.recurring_template_id: None}, synchronize_session=False)
+                    )
+                    db.commit()
+    except Exception as e:
+        # Log error but don't fail the request - cleanup can happen on next request
+        logger.warning(f"Error during orphaned instance cleanup for user {current_user.id}: {e}")
+        db.rollback()
     
     tasks = (
         db.query(Task)
@@ -239,8 +245,17 @@ def _sync_is_completed_with_status(task: Task, payload: TaskUpdate, fields_set: 
     if 'is_completed' in fields_set:
         if payload.is_completed:
             task.status = TaskStatus.COMPLETED.value
-        elif task.status == TaskStatus.COMPLETED.value or task.status == "completed":
-            task.status = TaskStatus.TODO.value
+            # Set completed_at when marking as complete
+            if not task.completed_at:
+                from datetime import datetime, timezone
+                task.completed_at = datetime.now(timezone.utc)
+        else:
+            # payload.is_completed is False - unmark as complete
+            # Only change status if it's currently COMPLETED
+            if task.status == TaskStatus.COMPLETED.value or task.status == "completed":
+                task.status = TaskStatus.TODO.value
+            # Always clear completed_at when unmarking as complete
+            task.completed_at = None
 
 
 def _sync_status_with_is_completed(
@@ -253,6 +268,10 @@ def _sync_status_with_is_completed(
     status_value = payload.status.value if isinstance(payload.status, TaskStatus) else payload.status
     if status_value == TaskStatus.COMPLETED.value or status_value == "completed":
         task.is_completed = True
+        # Set completed_at when marking as complete
+        if not task.completed_at:
+            from datetime import datetime, timezone
+            task.completed_at = datetime.now(timezone.utc)
         if task.recurring_template_id and not task.is_recurring_template:
             try:
                 recurring_tasks.generate_next_instance_on_completion(db, task)
@@ -260,6 +279,8 @@ def _sync_status_with_is_completed(
                 pass
     elif task.is_completed and status_value != TaskStatus.COMPLETED.value and status_value != "completed":
         task.is_completed = False
+        # Clear completed_at when unmarking as complete
+        task.completed_at = None
 
 
 def _handle_recurrence_pattern_update(

@@ -75,6 +75,7 @@ export interface Task {
   status: TaskStatus;
   subtasks?: Subtask[] | null;
   is_completed: boolean;
+  completed_at?: string | null;  // Timestamp when task was marked complete
   // Recurring task fields
   is_recurring_template?: boolean;
   recurring_template_id?: number | null;

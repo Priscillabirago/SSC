@@ -44,8 +44,8 @@ export function AnalyticsView() {
   if (hasNoData) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Performance Analytics</h1>
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Performance Analytics</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Deep dive into your study patterns. Research shows students who track and analyze their performance improve faster.
           </p>
@@ -60,11 +60,11 @@ export function AnalyticsView() {
             Start by creating tasks and generating a schedule. Once you complete some study sessions, 
             you'll see detailed analytics here.
           </p>
-          <div className="flex items-center justify-center gap-3">
+          <div className="flex items-center justify-center gap-3 flex-wrap">
             <Button
               variant="default"
               onClick={() => router.push("/tasks")}
-              className="gap-2"
+              className="gap-2 flex-1 sm:flex-initial"
             >
               <ListTodo className="h-4 w-4" />
               Go to Tasks
@@ -72,7 +72,7 @@ export function AnalyticsView() {
             <Button
               variant="outline"
               onClick={() => router.push("/schedule")}
-              className="gap-2"
+              className="gap-2 flex-1 sm:flex-initial"
             >
               <Calendar className="h-4 w-4" />
               View Schedule
@@ -85,19 +85,19 @@ export function AnalyticsView() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Performance Analytics</h1>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Performance Analytics</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Deep dive into your study patterns. Research shows students who track and analyze their performance improve faster.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             variant="outline"
             size="sm"
             onClick={() => router.push("/schedule")}
-            className="gap-2"
+            className="gap-2 flex-1 sm:flex-initial"
           >
             <Calendar className="h-4 w-4" />
             Schedule
@@ -106,7 +106,7 @@ export function AnalyticsView() {
             variant="outline"
             size="sm"
             onClick={() => router.push("/tasks")}
-            className="gap-2"
+            className="gap-2 flex-1 sm:flex-initial"
           >
             <ListTodo className="h-4 w-4" />
             Tasks
@@ -152,7 +152,7 @@ export function AnalyticsView() {
           <h2 className="text-lg font-semibold text-foreground">Productivity Overview</h2>
           <div className="h-px flex-1 bg-border/50" />
         </div>
-        <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-[1.1fr_0.9fr]">
           <ProductivityTrendChart data={analytics.productivity_trend} />
           <TimeDistributionChart data={analytics.time_distribution} />
         </div>
@@ -165,7 +165,7 @@ export function AnalyticsView() {
           <h2 className="text-lg font-semibold text-foreground">Performance Analysis</h2>
           <div className="h-px flex-1 bg-border/50" />
         </div>
-        <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-[1fr_1fr]">
           <SubjectPerformanceTable data={analytics.subject_performance} />
           <EnergyProductivityChart data={analytics.energy_productivity} />
         </div>

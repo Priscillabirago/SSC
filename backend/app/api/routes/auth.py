@@ -2,9 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api import deps
+from app.core.config import get_settings
 from app.core.security import (
     create_access_token,
     create_refresh_token,
+    create_password_reset_token,
     decode_token,
     get_password_hash,
     verify_password,
@@ -87,16 +89,78 @@ def refresh_token(
     )
 
 
+@router.post("/forgot-password")
+def forgot_password(
+    payload: auth_schema.ForgotPasswordRequest,
+    db: Session = Depends(get_db),  # noqa: B008
+) -> dict[str, str]:
+    """Request password reset - generates a reset token and sends email.
+    
+    Note: In production, this should send an email with the reset link.
+    For now, it returns a success message. The token can be retrieved
+    from logs in development or via email in production.
+    """
+    user = db.query(User).filter(User.email == payload.email).first()
+    if not user:
+        # Don't reveal if email exists for security
+        return {"message": "If that email exists, we've sent a password reset link."}
+    
+    # Generate reset token
+    reset_token = create_password_reset_token(user.id)
+    
+    # Note: Email sending can be added here for production
+    # In production, send email with link like: {frontend_url}/reset-password?token={reset_token}
+    # For local development, log the token to console
+    if get_settings().environment == "development":
+        print(f"Password reset token for {user.email}: {reset_token}")
+        print(f"Reset link: http://localhost:3000/reset-password?token={reset_token}")
+    
+    return {"message": "If that email exists, we've sent a password reset link."}
+
+
+@router.post("/reset-password-with-token")
+def reset_password_with_token(
+    payload: auth_schema.ResetPasswordWithTokenRequest,
+    db: Session = Depends(get_db),  # noqa: B008
+) -> dict[str, str]:
+    """Reset password using a token from email (when user is not logged in)."""
+    try:
+        data = decode_token(payload.token)
+        if data.get("type") != "password_reset":
+            raise ValueError("Invalid reset token")
+        user_id = int(data["sub"])
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        ) from exc
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    
+    user.hashed_password = get_password_hash(payload.new_password)
+    db.add(user)
+    db.commit()
+    
+    return {"message": "Password reset successfully"}
+
+
 @router.get("/me", response_model=UserPublic)
-def read_current_user(current_user: User = Depends(deps.get_current_user)) -> UserPublic:
+def read_current_user(
+    current_user: User = Depends(deps.get_current_user),  # noqa: B008  # NOSONAR - FastAPI dependency injection pattern
+) -> UserPublic:
     return current_user
 
 
 @router.post("/change-password")
 def change_password(
     payload: auth_schema.ChangePasswordRequest,
-    current_user: User = Depends(deps.get_current_user),  # noqa: B008
-    db: Session = Depends(get_db),  # noqa: B008
+    current_user: User = Depends(deps.get_current_user),  # noqa: B008  # NOSONAR - FastAPI dependency injection pattern
+    db: Session = Depends(get_db),  # noqa: B008  # NOSONAR - FastAPI dependency injection pattern
 ) -> dict[str, str]:
     """Change password - requires current password."""
     if not verify_password(payload.current_password, current_user.hashed_password):
@@ -115,8 +179,8 @@ def change_password(
 @router.post("/reset-password")
 def reset_password(
     payload: auth_schema.ResetPasswordRequest,
-    current_user: User = Depends(deps.get_current_user),  # noqa: B008
-    db: Session = Depends(get_db),  # noqa: B008
+    current_user: User = Depends(deps.get_current_user),  # noqa: B008  # NOSONAR - FastAPI dependency injection pattern
+    db: Session = Depends(get_db),  # noqa: B008  # NOSONAR - FastAPI dependency injection pattern
 ) -> dict[str, str]:
     """Reset password when logged in - no email verification needed since user is authenticated.
     
@@ -133,8 +197,8 @@ def reset_password(
 @router.post("/change-email")
 def change_email(
     payload: auth_schema.ChangeEmailRequest,
-    current_user: User = Depends(deps.get_current_user),  # noqa: B008
-    db: Session = Depends(get_db),  # noqa: B008
+    current_user: User = Depends(deps.get_current_user),  # noqa: B008  # NOSONAR - FastAPI dependency injection pattern
+    db: Session = Depends(get_db),  # noqa: B008  # NOSONAR - FastAPI dependency injection pattern
 ) -> UserPublic:
     """Change email - requires password confirmation for security."""
     if not verify_password(payload.password, current_user.hashed_password):

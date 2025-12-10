@@ -1,5 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import json
 
@@ -74,10 +74,10 @@ def build_coach_context(db: Session, user: User) -> dict[str, Any]:
         .filter(
             Task.user_id == user.id,
             Task.is_completed.is_(True),
-            Task.updated_at >= today_start_utc,
-            Task.updated_at < tomorrow_start_utc,
+            Task.completed_at >= today_start_utc,
+            Task.completed_at < tomorrow_start_utc,
         )
-        .order_by(Task.updated_at.desc())
+        .order_by(Task.completed_at.desc())
         .limit(10)
         .all()
     )
@@ -259,8 +259,8 @@ def record_reflection(
     *,
     user_id: int,
     day: date,
-    worked: str,
-    challenging: str,
+    worked: Optional[str],
+    challenging: Optional[str],
     summary: str,
     suggestion: str,
 ) -> DailyReflection:
@@ -292,14 +292,19 @@ def record_reflection(
 def update_session_status(
     db: Session,
     *,
+    user_id: int,
     session_ids: list[int],
     status: SessionStatus,
 ) -> None:
+    """Update session status for multiple sessions. Requires user_id for security."""
     if not session_ids:
         return
     (
         db.query(StudySession)
-        .filter(StudySession.id.in_(session_ids))
+        .filter(
+            StudySession.id.in_(session_ids),
+            StudySession.user_id == user_id,  # Security: ensure user can only update their own sessions
+        )
         .update({"status": status}, synchronize_session=False)
     )
     db.commit()

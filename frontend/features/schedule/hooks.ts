@@ -29,7 +29,7 @@ export function useMicroPlan() {
 
 export function useUpdateSession() {
   return useMutation({
-    mutationFn: ({ sessionId, payload }: { sessionId: number; payload: { status?: StudySession["status"]; notes?: string } }) =>
+    mutationFn: ({ sessionId, payload }: { sessionId: number; payload: { status?: StudySession["status"]; notes?: string; start_time?: string; end_time?: string } }) =>
       updateSession(sessionId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["schedule", "sessions"] });

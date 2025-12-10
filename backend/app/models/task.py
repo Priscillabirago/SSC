@@ -55,6 +55,7 @@ class Task(Base):
     # Subtasks stored as JSON: [{"id": "uuid", "title": "string", "completed": bool, "estimated_minutes": int}]
     subtasks = Column(JSON, nullable=True, default=None)
     is_completed = Column(Boolean, nullable=False, default=False)
+    completed_at = Column(DateTime, nullable=True, default=None)  # Timestamp when task was marked complete
     
     # Recurring task fields
     is_recurring_template = Column(Boolean, nullable=False, default=False)

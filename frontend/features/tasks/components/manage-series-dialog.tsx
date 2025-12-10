@@ -11,6 +11,7 @@ import type { Task, RecurrencePattern } from "@/lib/types";
 import { useUpdateTask, useTasks } from "@/features/tasks/hooks";
 import { toast } from "@/components/ui/use-toast";
 import { RecurrenceSelector } from "./recurrence-selector";
+import { localDateTimeToUTCISO } from "@/lib/utils";
 
 interface ManageSeriesDialogProps {
   readonly open: boolean;
@@ -42,7 +43,15 @@ export function ManageSeriesDialog({ open, onOpenChange, instance, template }: M
       return;
     }
 
-    const endDate = recurrenceEndDate ? new Date(recurrenceEndDate).toISOString() : undefined;
+    // Parse recurrence end date in local timezone (format: "YYYY-MM-DD")
+    const endDate = recurrenceEndDate ? (() => {
+      const dateParts = recurrenceEndDate.split('-');
+      if (dateParts.length === 3) {
+        const [year, month, day] = dateParts.map(Number);
+        return localDateTimeToUTCISO(year, month, day, 23, 59);
+      }
+      return undefined;
+    })() : undefined;
 
     // If recurrence pattern is null, we're removing recurrence
     const isRemovingRecurrence = !recurrencePattern;

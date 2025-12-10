@@ -10,6 +10,12 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { StudySession } from "@/lib/types";
 import { formatTime } from "@/lib/utils";
+import { StartTrackingButton } from "@/components/tracking/start-tracking-button";
+import { useFocusSession } from "@/contexts/focus-session-context";
+import { useQuickTrack } from "@/contexts/quick-track-context";
+import { useTasks, useUpdateTask } from "@/features/tasks/hooks";
+import { useSubjects } from "@/features/subjects/hooks";
+import { toast } from "@/components/ui/use-toast";
 
 interface TodayPlanCardProps {
   readonly todaySessions: StudySession[];
@@ -17,9 +23,24 @@ interface TodayPlanCardProps {
 
 export function TodayPlanCard({ todaySessions }: TodayPlanCardProps) {
   const router = useRouter();
+  const { startSession } = useFocusSession();
+  const { stopQuickTrack, isActive: isQuickTrackActive, getElapsedTime } = useQuickTrack();
+  const updateTask = useUpdateTask();
+  const { data: tasks } = useTasks();
+  const { data: subjects } = useSubjects();
   const completedCount = todaySessions.filter(s => s.status === "completed").length;
   const totalCount = todaySessions.length;
   const progress = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
+
+  const getTaskForSession = (session: StudySession) => {
+    if (!session.task_id || !tasks) return null;
+    return tasks.find((t) => t.id === session.task_id) || null;
+  };
+
+  const getSubjectForSession = (session: StudySession) => {
+    if (!session.subject_id || !subjects) return null;
+    return subjects.find((s) => s.id === session.subject_id) || null;
+  };
 
   return (
     <Card className="h-full">
@@ -85,30 +106,71 @@ export function TodayPlanCard({ todaySessions }: TodayPlanCardProps) {
               </div>
             )}
             <div className="space-y-2">
-              {todaySessions.map((session) => (
-                <div
-                  key={session.id}
-                  className="rounded-xl border border-border/50 bg-white/60 px-4 py-3 text-sm hover:bg-white/80 transition-colors"
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                      <p className="font-medium text-foreground">
-                        {formatTime(session.start_time)} – {formatTime(session.end_time)}
-                      </p>
+              {todaySessions.map((session) => {
+                const sessionTask = getTaskForSession(session);
+                const sessionSubject = getSubjectForSession(session);
+                return (
+                  <div
+                    key={session.id}
+                    className="rounded-xl border border-border/50 bg-white/60 px-4 py-3 text-sm hover:bg-white/80 transition-colors"
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <Clock className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                        <p className="font-medium text-foreground truncate">
+                          {formatTime(session.start_time)} – {formatTime(session.end_time)}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {session.status === "planned" && (
+                          <StartTrackingButton
+                            task={sessionTask}
+                            session={session}
+                            subject={sessionSubject}
+                            variant="default"
+                            size="sm"
+                            className="h-6 text-xs px-2"
+                            showQuickTrack={false}
+                            onFocusSessionStart={() => {
+                              // Calculate Quick Track time if active
+                              const quickTrackTimeMs = sessionTask && isQuickTrackActive(sessionTask.id)
+                                ? getElapsedTime(sessionTask.id) * 60 * 1000
+                                : 0;
+                              
+                              // Stop Quick Track if active and save time
+                              if (sessionTask && isQuickTrackActive(sessionTask.id)) {
+                                const elapsed = stopQuickTrack(sessionTask.id, true);
+                                const currentTimer = sessionTask.timer_minutes_spent ?? 0;
+                                updateTask.mutate({
+                                  id: sessionTask.id,
+                                  payload: {
+                                    timer_minutes_spent: currentTimer + elapsed,
+                                  },
+                                });
+                              }
+                              
+                              startSession(session, sessionTask, sessionSubject, quickTrackTimeMs);
+                              toast({
+                                title: "Focus session started",
+                                description: "Entering focus mode...",
+                              });
+                            }}
+                          />
+                        )}
+                        <Badge 
+                          variant={session.status === "completed" ? "default" : "outline"}
+                          className="text-xs"
+                        >
+                          {session.status}
+                        </Badge>
+                      </div>
                     </div>
-                    <Badge 
-                      variant={session.status === "completed" ? "default" : "outline"}
-                      className="text-xs"
-                    >
-                      {session.status}
-                    </Badge>
+                    <p className="text-xs text-muted-foreground ml-6">
+                      {session.focus || session.generated_by || "Study session"}
+                    </p>
                   </div>
-                  <p className="text-xs text-muted-foreground ml-6">
-                    {session.focus || session.generated_by || "Study session"}
-                  </p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}

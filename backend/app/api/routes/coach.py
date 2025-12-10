@@ -1,8 +1,8 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import json
+import logging
 import re
 from typing import Any
-from datetime import datetime
 from sqlalchemy import inspect
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body
@@ -13,6 +13,12 @@ from app.coach.factory import get_coach_adapter
 from app.db.session import get_db
 from app.models.user import User
 from app.models.coach_message import CoachMessage
+from app.models.study_session import StudySession, SessionStatus
+from app.models.task import Task
+from app.models.daily_energy import DailyEnergy
+from app.models.daily_reflection import DailyReflection
+
+logger = logging.getLogger(__name__)
 from app.schemas.coach import (
     CoachChatRequest,
     CoachChatResponse,
@@ -23,6 +29,9 @@ from app.schemas.coach import (
     CoachReflectionResponse,
     CoachMessageCreate,
     CoachMessagePublic,
+    DailySummaryResponse,
+    SessionEncouragementRequest,
+    SessionEncouragementResponse,
 )
 from app.services import coach as coach_service
 from app.services.scheduling import micro_plan
@@ -194,13 +203,195 @@ def coach_reflect(
     )
 
 
+@router.get("/daily-summary", response_model=DailySummaryResponse)
+def get_daily_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> DailySummaryResponse:
+    """Generate or retrieve automatic end-of-day summary.
+    
+    Returns summary for yesterday (to show in morning before first session)
+    or today (to show after last session ends).
+    Also returns session timing info for frontend to determine when to show.
+    """
+    from zoneinfo import ZoneInfo
+    
+    # Get current time in user's timezone
+    try:
+        tz = ZoneInfo(current_user.timezone)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    now_local = datetime.now(tz)
+    now_utc = datetime.now(timezone.utc)
+    today = now_local.date()
+    today_start_local = datetime.combine(today, datetime.min.time()).replace(tzinfo=tz)
+    today_end_local = today_start_local + timedelta(days=1)
+    today_end_utc = today_end_local.astimezone(timezone.utc)
+    
+    # Get first upcoming session for today (to determine if we should show yesterday's summary)
+    first_upcoming_session = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.start_time >= now_utc,
+            StudySession.start_time < today_end_utc,
+        )
+        .order_by(StudySession.start_time.asc())
+        .first()
+    )
+    first_session_start = first_upcoming_session.start_time.isoformat() if first_upcoming_session else None
+    
+    # Determine which day to summarize
+    # If it's morning and we have a first session, show yesterday's summary
+    # Otherwise, show today's summary (for after last session)
+    if now_local.hour < 12 and first_session_start:
+        target_day = (now_local - timedelta(days=1)).date()
+    else:
+        target_day = today
+    
+    target_day_start_local = datetime.combine(target_day, datetime.min.time()).replace(tzinfo=tz)
+    target_day_end_local = target_day_start_local + timedelta(days=1)
+    target_day_start_utc = target_day_start_local.astimezone(timezone.utc)
+    target_day_end_utc = target_day_end_local.astimezone(timezone.utc)
+    
+    # Get last completed session for target_day (the day we're summarizing)
+    last_completed_session = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.status.in_([SessionStatus.COMPLETED, SessionStatus.PARTIAL]),
+            StudySession.start_time >= target_day_start_utc,
+            StudySession.start_time < target_day_end_utc,
+        )
+        .order_by(StudySession.end_time.desc())
+        .first()
+    )
+    last_session_end = last_completed_session.end_time.isoformat() if last_completed_session and last_completed_session.end_time else None
+    
+    # Check if we already have an auto-generated summary for target day
+    existing_reflection = (
+        db.query(DailyReflection)
+        .filter(
+            DailyReflection.user_id == current_user.id,
+            DailyReflection.day == target_day,
+            DailyReflection.worked.is_(None),  # Auto-generated if worked is null
+            DailyReflection.challenging.is_(None)  # Auto-generated if challenging is null
+        )
+        .first()
+    )
+    
+    if existing_reflection and existing_reflection.summary:
+        # Return existing summary with session timing
+        return DailySummaryResponse(
+            summary=existing_reflection.summary,
+            tomorrow_tip=existing_reflection.suggestion or "",
+            tone="positive",
+            last_session_end=last_session_end,
+            first_session_start=first_session_start,
+            user_timezone=current_user.timezone or "UTC"
+        )
+    
+    # Build daily context for target day
+    completed_sessions = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.status.in_([SessionStatus.COMPLETED, SessionStatus.PARTIAL]),
+            StudySession.start_time >= target_day_start_utc,
+            StudySession.start_time < target_day_end_utc,
+        )
+        .all()
+    )
+    
+    completed_tasks = (
+        db.query(Task)
+        .filter(
+            Task.user_id == current_user.id,
+            Task.is_completed.is_(True),
+            Task.completed_at >= target_day_start_utc,
+            Task.completed_at < target_day_end_utc,
+        )
+        .all()
+    )
+    
+    # Calculate total minutes
+    total_minutes = sum(
+        int((session.end_time - session.start_time).total_seconds() // 60)
+        for session in completed_sessions
+    )
+    
+    # Get target day's energy
+    energy_target_day = (
+        db.query(DailyEnergy)
+        .filter(DailyEnergy.user_id == current_user.id, DailyEnergy.day == target_day)
+        .first()
+    )
+    energy_level = energy_target_day.level if energy_target_day else "medium"
+    
+    # Get tasks due the day after target day
+    next_day_start_local = target_day_end_local
+    next_day_end_local = next_day_start_local + timedelta(days=1)
+    next_day_start_utc = next_day_start_local.astimezone(timezone.utc)
+    next_day_end_utc = next_day_end_local.astimezone(timezone.utc)
+    
+    tasks_next_day = (
+        db.query(Task)
+        .filter(
+            Task.user_id == current_user.id,
+            Task.is_completed.is_(False),
+            Task.deadline.isnot(None),
+            Task.deadline >= next_day_start_utc,
+            Task.deadline < next_day_end_utc,
+        )
+        .all()
+    )
+    
+    # Build daily context
+    daily_context = {
+        "completed_sessions": completed_sessions,
+        "completed_tasks": completed_tasks,
+        "total_minutes": total_minutes,
+        "energy_level": energy_level,
+        "tasks_tomorrow": tasks_next_day,
+    }
+    
+    # Generate summary using AI
+    adapter = get_coach_adapter()
+    user_context = coach_service.build_coach_context(db, current_user)
+    ai_response = adapter.generate_daily_summary(current_user, daily_context, user_context)
+    
+    summary = ai_response.get("summary", "")
+    tomorrow_tip = ai_response.get("tomorrow_tip", "")
+    tone = ai_response.get("tone", "positive")
+    
+    # Store in DailyReflection (with worked/challenging as None to indicate auto-generated)
+    coach_service.record_reflection(
+        db,
+        user_id=current_user.id,
+        day=target_day,
+        worked=None,  # None indicates auto-generated
+        challenging=None,  # None indicates auto-generated
+        summary=summary,
+        suggestion=tomorrow_tip,
+    )
+    
+    return DailySummaryResponse(
+        summary=summary,
+        tomorrow_tip=tomorrow_tip,
+        tone=tone,
+        last_session_end=last_session_end,
+        first_session_start=first_session_start,
+        user_timezone=current_user.timezone or "UTC"
+    )
+
+
 def to_dt(value):
     if isinstance(value, str):
         try:
             # Accept both ISO8601 with T and with space
             return datetime.fromisoformat(value.replace("T", " "))
         except Exception as e:
-            print(f"Failed to parse datetime: {value} - {e}")
+            logger.warning(f"Failed to parse datetime: {value} - {e}")
             return None
     return value
 
@@ -217,7 +408,7 @@ def fuzzy_find(tasks, subjects, focus):
     if len(matched_subjects) == 1 and not matched_tasks:
         return (None, matched_subjects[0].id)
     if len(matched_tasks) + len(matched_subjects) > 1:
-        print(f"ERROR: Ambiguous focus '{focus}'. Matches: tasks={[t.title for t in matched_tasks]}, subjects={[s.name for s in matched_subjects]}")
+        logger.warning(f"Ambiguous focus '{focus}'. Matches: tasks={[t.title for t in matched_tasks]}, subjects={[s.name for s in matched_subjects]}")
         return "ambiguous", "ambiguous"
     return None, None
 
@@ -225,8 +416,9 @@ def handle_task_add(details, db, current_user, task_model):
     task_kwargs = {k: v for k, v in details.items() if k != "id"}
     task = task_model(user_id=current_user.id, **task_kwargs)
     db.add(task)
-    db.commit(); db.refresh(task)
-    print(f"SUCCESS: Task added: {task.id} | {task.title}")
+    db.commit()
+    db.refresh(task)
+    logger.info(f"Task added: {task.id} | {task.title}")
     return {"success": True, "id": task.id}
 
 def handle_task_edit(details, db, current_user, task_model):
@@ -235,7 +427,7 @@ def handle_task_edit(details, db, current_user, task_model):
         return {"success": False, "error": "You must specify a task ID to edit it."}
     task = db.query(task_model).filter(task_model.id==task_id, task_model.user_id==current_user.id).first()
     if not task:
-        print("ERROR: Task not found for edit")
+        logger.warning(f"Task not found for edit: task_id={task_id}, user_id={current_user.id}")
         return {"success": False, "error": "Task not found."}
     for k, v in details.items():
         if k != "id" and hasattr(task, k):
@@ -243,18 +435,20 @@ def handle_task_edit(details, db, current_user, task_model):
                 v = to_dt(v)
             setattr(task, k, v)
     db.add(task)
-    db.commit(); db.refresh(task)
-    print(f"SUCCESS: Task edited: {task.id}")
+    db.commit()
+    db.refresh(task)
+    logger.info(f"Task edited: {task.id}")
     return {"success": True, "id": task.id}
 
 def handle_task_delete(details, db, current_user, task_model):
     task_id = details.get("id")
     task = db.query(task_model).filter(task_model.id==task_id, task_model.user_id==current_user.id).first()
     if not task:
-        print("ERROR: Task not found for delete")
+        logger.warning(f"Task not found for delete: task_id={task_id}, user_id={current_user.id}")
         return {"success": False, "error": "Task not found."}
-    db.delete(task); db.commit()
-    print(f"SUCCESS: Task deleted: {task_id}")
+    db.delete(task)
+    db.commit()
+    logger.info(f"Task deleted: {task_id}")
     return {"success": True}
 
 def handle_schedule_add(details, db, current_user, study_session_model, subject_model, task_model):
@@ -288,31 +482,35 @@ def handle_schedule_add(details, db, current_user, study_session_model, subject_
         **session_kwargs
     )
     db.add(session)
-    db.commit(); db.refresh(session)
-    print(f"SUCCESS: StudySession added: {session.id}")
+    db.commit()
+    db.refresh(session)
+    logger.info(f"StudySession added: {session.id}")
     return {"success": True, "id": session.id}
 
 def handle_schedule_edit(details, db, current_user, study_session_model):
     session_id = details.get("id")
     session = db.query(study_session_model).filter(study_session_model.id==session_id, study_session_model.user_id==current_user.id).first()
     if not session: 
-        print("ERROR: Session not found")
+        logger.warning(f"Session not found for edit: session_id={session_id}, user_id={current_user.id}")
         return {"success": False, "error": "Session not found."}
     for k,v in details.items():
-        if k != "id" and hasattr(session, k): setattr(session, k, v)
+        if k != "id" and hasattr(session, k): 
+            setattr(session, k, v)
     db.add(session)
-    db.commit(); db.refresh(session)
-    print(f"SUCCESS: StudySession edited: {session.id}")
+    db.commit()
+    db.refresh(session)
+    logger.info(f"StudySession edited: {session.id}")
     return {"success": True, "id": session.id}
 
 def handle_schedule_delete(details, db, current_user, study_session_model):
     session_id = details.get("id")
     session = db.query(study_session_model).filter(study_session_model.id==session_id, study_session_model.user_id==current_user.id).first()
     if not session:
-        print("ERROR: Session not found for delete")
+        logger.warning(f"Session not found for delete: session_id={session_id}, user_id={current_user.id}")
         return {"success": False, "error": "Session not found."}
-    db.delete(session); db.commit()
-    print(f"SUCCESS: StudySession deleted: {session_id}")
+    db.delete(session)
+    db.commit()
+    logger.info(f"StudySession deleted: {session_id}")
     return {"success": True}
 
 @router.post("/apply-proposal")
@@ -329,7 +527,6 @@ def apply_coach_proposal(
     if typ not in supported_types or action not in supported_actions:
         return {"success": False, "error": "Unsupported proposal type or action."}
     try:
-        print(f"APPLY PROPOSAL: {typ=} {action=} {details=}")
         if typ == "task_update":
             from app.models.task import Task as task_model
             if action == "add":
@@ -348,10 +545,8 @@ def apply_coach_proposal(
                 return handle_schedule_edit(details, db, current_user, study_session_model)
             elif action == "delete":
                 return handle_schedule_delete(details, db, current_user, study_session_model)
-        print("WARN: Not implemented for type/action", typ, action)
         return {"success": False, "error": "Not implemented for type/action"}
     except Exception as e:
-        print(f"APPLY PROPOSAL ERROR: {e}")
         return {"success": False, "error": str(e)}
 
 
@@ -398,6 +593,33 @@ def delete_all_chat_history(db: Session = Depends(get_db), current_user: User = 
     db.query(CoachMessage).filter(CoachMessage.user_id == current_user.id).delete()
     db.commit()
     return None
+
+
+@router.post("/session-encouragement", response_model=SessionEncouragementResponse)
+def get_session_encouragement(
+    payload: SessionEncouragementRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> SessionEncouragementResponse:
+    """Generate encouraging, motivational messages during a focus session."""
+    adapter = get_coach_adapter()
+    user_context = coach_service.build_coach_context(db, current_user)
+    
+    session_context = {
+        "elapsed_minutes": payload.elapsed_minutes,
+        "remaining_minutes": payload.remaining_minutes,
+        "progress_percent": payload.progress_percent,
+        "task_title": payload.task_title or "your work",
+        "is_paused": payload.is_paused,
+        "pomodoro_count": payload.pomodoro_count,
+    }
+    
+    ai_response = adapter.get_session_encouragement(current_user, session_context, user_context)
+    
+    return SessionEncouragementResponse(
+        message=ai_response.get("message", "Stay focused! You're making progress."),
+        tone=ai_response.get("tone", "supportive")
+    )
 
 
 MEMORY_BLOCK_PATTERN = re.compile(r"<<memory:(.*?)>>", re.DOTALL)

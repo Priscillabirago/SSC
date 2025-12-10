@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Pencil } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -79,10 +80,12 @@ export function SubjectCard({ subject, taskCount = 0, onClick }: Readonly<{ subj
               <Button 
                 variant="ghost" 
                 size="sm"
+                className="gap-1.5"
                 onClick={(e) => {
                   e.stopPropagation();
                 }}
               >
+                <Pencil className="h-3.5 w-3.5" />
                 Edit
               </Button>
             </DialogTrigger>

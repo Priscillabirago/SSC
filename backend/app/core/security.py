@@ -31,6 +31,15 @@ def _create_token(subject: str | int, expires_delta: timedelta, token_type: str)
     )
 
 
+def create_refresh_token(subject: str | int) -> str:
+    settings = get_settings()
+    return _create_token(
+        subject,
+        timedelta(minutes=settings.refresh_token_expire_minutes),
+        token_type="refresh",
+    )
+
+
 def create_access_token(subject: str | int) -> str:
     settings = get_settings()
     return _create_token(
@@ -40,12 +49,12 @@ def create_access_token(subject: str | int) -> str:
     )
 
 
-def create_refresh_token(subject: str | int) -> str:
-    settings = get_settings()
+def create_password_reset_token(subject: str | int) -> str:
+    """Create a short-lived token for password reset (1 hour expiration)."""
     return _create_token(
         subject,
-        timedelta(minutes=settings.refresh_token_expire_minutes),
-        token_type="refresh",
+        timedelta(hours=1),
+        token_type="password_reset",
     )
 
 

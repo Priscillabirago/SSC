@@ -7,3 +7,4 @@ pydantic-settings
 email-validator
 bcrypt
 openai
+google-generativeai

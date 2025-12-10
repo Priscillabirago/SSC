@@ -68,3 +68,45 @@ export function formatForDateTimeLocal(date: Date): string {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
+/**
+ * Format minutes as a readable time string (e.g., "30m", "1h 30m", "2h").
+ */
+export function formatTimer(minutes: number | null | undefined): string {
+  if (minutes == null || minutes === 0) return "0m";
+  
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  
+  if (hours === 0) {
+    return `${remainingMinutes}m`;
+  } else if (remainingMinutes === 0) {
+    return `${hours}h`;
+  } else {
+    return `${hours}h ${remainingMinutes}m`;
+  }
+}
+
+/**
+ * Convert a local date/time to UTC ISO string, preserving the date component.
+ * This ensures that a user setting "Dec 10 23:59" in their local timezone
+ * results in a UTC time that, when displayed back in their local timezone,
+ * still shows as "Dec 10" (not "Dec 11").
+ * 
+ * The solution: Create the date at midnight UTC for the given date components,
+ * then add the hours/minutes. This ensures the date component is preserved
+ * regardless of timezone offset.
+ */
+export function localDateTimeToUTCISO(
+  year: number,
+  month: number, // 1-12 (not 0-11)
+  day: number,
+  hours: number = 23,
+  minutes: number = 59
+): string {
+  // Create date at midnight UTC for the given date components
+  // This preserves the date (year, month, day) regardless of local timezone
+  const utcDate = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0, 0));
+  
+  return utcDate.toISOString();
+}
+

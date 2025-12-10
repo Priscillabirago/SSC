@@ -1,4 +1,4 @@
-import { getCoachChatHistory, postCoachChatMessage, coachChat, coachMicroPlan, coachReflect, coachSuggestPlan, coachApplyProposal, deleteCoachChatMessage, deleteAllCoachChatHistory } from "./api";
+import { getCoachChatHistory, postCoachChatMessage, coachChat, coachMicroPlan, coachReflect, coachSuggestPlan, coachApplyProposal, deleteCoachChatMessage, deleteAllCoachChatHistory, getDailySummary } from "./api";
 import { useQuery, useMutation } from "@tanstack/react-query";
 
 export function useCoachChat() {
@@ -53,6 +53,14 @@ export function useDeleteCoachChatMessage() {
 export function useDeleteAllCoachChatHistory() {
   return useMutation({
     mutationFn: deleteAllCoachChatHistory,
+  });
+}
+
+export function useDailySummary() {
+  return useQuery({
+    queryKey: ["coach", "daily-summary"],
+    queryFn: getDailySummary,
+    staleTime: 1000 * 60 * 60, // 1 hour - summary doesn't change often
   });
 }
 

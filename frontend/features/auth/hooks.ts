@@ -24,7 +24,9 @@ function extractErrorMessage(error: unknown, fallback: string) {
 export function useLogin() {
   const router = useRouter();
   return useMutation({
-    mutationFn: ({ email, password }: { email: string; password: string }) => login(email, password),
+    mutationFn: ({ email, password }: { email: string; password: string }) => {
+      return login(email, password);
+    },
     onSuccess: (tokens) => {
       storeTokens(tokens);
       queryClient.invalidateQueries({ queryKey: ["profile"] });

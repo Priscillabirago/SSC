@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from app.coach.context_utils import build_context_lines
 from app.coach.adapter import CoachAdapter
@@ -14,6 +14,9 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 class GeminiCoachAdapter(CoachAdapter):
+    # Regex pattern to extract JSON from model responses
+    JSON_EXTRACTION_PATTERN = r'\{.*\}'
+    
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         if genai and self.api_key:
@@ -27,6 +30,94 @@ class GeminiCoachAdapter(CoachAdapter):
             "reply": f"{headline}\n" + "\n".join(f"- {item}" for item in details),
             "plan_adjusted": False,
         }
+    
+    def _determine_task_type_instruction(self, is_academic: bool, task_title: str, task_description: str) -> str:
+        """Determine the task type instruction based on task characteristics."""
+        if is_academic:
+            return "This is an ACADEMIC/STUDY task. Provide research-backed study strategies (active recall, spaced repetition, Pomodoro, etc.)."
+        
+        task_lower = (task_title + " " + (task_description or "")).lower()
+        complex_keywords = ["write", "essay", "paper", "report", "presentation", "prepare", "review", "read", "analyze", "research"]
+        simple_keywords = ["melt", "cook", "buy", "pick", "simple", "quick"]
+        
+        if any(word in task_lower for word in complex_keywords):
+            return "This is a GENERAL but COMPLEX task. Provide productivity tips for execution, time management, or workflow (not study strategies)."
+        elif any(word in task_lower for word in simple_keywords):
+            return "This appears to be a SIMPLE task. Only provide tips if genuinely helpful, otherwise return empty tips."
+        else:
+            return "This is a GENERAL task. Provide productivity tips if relevant, otherwise minimal tips."
+    
+    def _build_preparation_prompt(
+        self, task_title: str, task_description: str, subject_name: str, 
+        subject_difficulty: str, duration_minutes: int, time_of_day: str,
+        deadline_proximity: str, priority: str, subtasks: list, is_academic: bool,
+        task_type_instruction: str
+    ) -> str:
+        """Build the prompt for session preparation."""
+        description_line = f"Description: {task_description}" if task_description else ""
+        subject_line = f"Subject: {subject_name} ({subject_difficulty} difficulty)" if subject_name else ""
+        deadline_line = f"Deadline: {deadline_proximity}" if deadline_proximity else ""
+        subtasks_line = f"Subtasks: {', '.join([st.get('title', '') for st in subtasks[:5]])}" if subtasks else ""
+        
+        requirement_1 = "For academic: Base tips on proven cognitive science methods (active recall, spaced repetition, interleaving, Pomodoro, etc.)" if is_academic else "For general: Provide practical productivity, execution, or workflow tips if relevant"
+        requirement_4 = "Recommend ONE primary study strategy" if is_academic else "Recommend a productivity approach if applicable"
+        requirement_6 = "If task is too simple, return empty tips and explain why" if not is_academic else ""
+        
+        return f"""Provide 3-5 actionable tips for this session. {task_type_instruction}
+
+Task: {task_title}
+{description_line}
+{subject_line}
+Duration: {duration_minutes} minutes
+Time: {time_of_day}
+{deadline_line}
+Priority: {priority}
+{subtasks_line}
+
+Requirements:
+1. {requirement_1}
+2. Be specific and actionable (not generic)
+3. Consider the task type, duration, and context
+4. {requirement_4}
+5. Keep tips concise (one sentence each)
+6. {requirement_6}
+7. Format response as JSON: {{"tips": ["tip1", "tip2", ...], "strategy": "strategy name", "rationale": "why this works"}}"""
+    
+    def _parse_preparation_response(self, reply: str) -> Optional[Dict[str, Any]]:
+        """Parse the JSON response from the model, returning None if parsing fails."""
+        try:
+            import json
+            import re
+            json_match = re.search(self.JSON_EXTRACTION_PATTERN, reply, re.DOTALL)
+            if json_match:
+                result_data = json.loads(json_match.group(0))
+                return {
+                    "tips": result_data.get("tips", []),
+                    "strategy": result_data.get("strategy", "Active Recall"),
+                    "rationale": result_data.get("rationale", "Evidence-based study methods improve retention and efficiency.")
+                }
+        except (json.JSONDecodeError, KeyError, AttributeError):
+            pass
+        return None
+
+    def _format_study_windows(self, preferred_study_windows: list) -> list[str]:
+        """Format study windows from various formats into string representations."""
+        window_strings = []
+        for window in preferred_study_windows:
+            if isinstance(window, str):
+                # Old format: just the preset name
+                window_strings.append(window)
+            elif isinstance(window, dict):
+                # New format: {"type": "preset", "value": "morning"} or {"type": "custom", "value": {"start": "13:00", "end": "17:00"}}
+                window_type = window.get("type")
+                value = window.get("value")
+                if window_type == "preset" and isinstance(value, str):
+                    window_strings.append(value)
+                elif window_type == "custom" and isinstance(value, dict):
+                    start = value.get("start", "")
+                    end = value.get("end", "")
+                    window_strings.append(f"{start}-{end}")
+        return window_strings
 
     def _prepare_prompt(self, user: User, request: str, context: dict[str, Any]) -> str:
         preamble = (
@@ -55,22 +146,7 @@ class GeminiCoachAdapter(CoachAdapter):
         summary.append(f"Timezone: {user.timezone}")
         summary.append(f"Weekly goal: {user.weekly_study_hours}h")
         if user.preferred_study_windows:
-            # Handle both old format (list of strings) and new format (list of dicts)
-            window_strings = []
-            for window in user.preferred_study_windows:
-                if isinstance(window, str):
-                    # Old format: just the preset name
-                    window_strings.append(window)
-                elif isinstance(window, dict):
-                    # New format: {"type": "preset", "value": "morning"} or {"type": "custom", "value": {"start": "13:00", "end": "17:00"}}
-                    window_type = window.get("type")
-                    value = window.get("value")
-                    if window_type == "preset" and isinstance(value, str):
-                        window_strings.append(value)
-                    elif window_type == "custom" and isinstance(value, dict):
-                        start = value.get("start", "")
-                        end = value.get("end", "")
-                        window_strings.append(f"{start}-{end}")
+            window_strings = self._format_study_windows(user.preferred_study_windows)
             if window_strings:
                 summary.append(
                     "Preferred windows: " + ", ".join(window_strings)
@@ -150,38 +226,12 @@ class GeminiCoachAdapter(CoachAdapter):
         priority = session_context.get("priority", "medium")
         is_academic = session_context.get("is_academic", False)
         
-        # Determine task type for appropriate tips
-        task_type_instruction = ""
-        if is_academic:
-            task_type_instruction = "This is an ACADEMIC/STUDY task. Provide research-backed study strategies (active recall, spaced repetition, Pomodoro, etc.)."
-        else:
-            task_lower = (task_title + " " + (task_description or "")).lower()
-            if any(word in task_lower for word in ["write", "essay", "paper", "report", "presentation", "prepare", "review", "read", "analyze", "research"]):
-                task_type_instruction = "This is a GENERAL but COMPLEX task. Provide productivity tips for execution, time management, or workflow (not study strategies)."
-            elif any(word in task_lower for word in ["melt", "cook", "buy", "pick", "simple", "quick"]):
-                task_type_instruction = "This appears to be a SIMPLE task. Only provide tips if genuinely helpful, otherwise return empty tips."
-            else:
-                task_type_instruction = "This is a GENERAL task. Provide productivity tips if relevant, otherwise minimal tips."
-        
-        prompt = f"""Provide 3-5 actionable tips for this session. {task_type_instruction}
-
-Task: {task_title}
-{f"Description: {task_description}" if task_description else ""}
-{f"Subject: {subject_name} ({subject_difficulty} difficulty)" if subject_name else ""}
-Duration: {duration_minutes} minutes
-Time: {time_of_day}
-{f"Deadline: {deadline_proximity}" if deadline_proximity else ""}
-Priority: {priority}
-{f"Subtasks: {', '.join([st.get('title', '') for st in subtasks[:5]])}" if subtasks else ""}
-
-Requirements:
-1. {"For academic: Base tips on proven cognitive science methods (active recall, spaced repetition, interleaving, Pomodoro, etc.)" if is_academic else "For general: Provide practical productivity, execution, or workflow tips if relevant"}
-2. Be specific and actionable (not generic)
-3. Consider the task type, duration, and context
-4. {"Recommend ONE primary study strategy" if is_academic else "Recommend a productivity approach if applicable"}
-5. Keep tips concise (one sentence each)
-6. {"If task is too simple, return empty tips and explain why" if not is_academic else ""}
-7. Format response as JSON: {{"tips": ["tip1", "tip2", ...], "strategy": "strategy name", "rationale": "why this works"}}"""
+        task_type_instruction = self._determine_task_type_instruction(is_academic, task_title, task_description)
+        prompt = self._build_preparation_prompt(
+            task_title, task_description, subject_name, subject_difficulty,
+            duration_minutes, time_of_day, deadline_proximity, priority,
+            subtasks, is_academic, task_type_instruction
+        )
 
         if not self.model:
             return {
@@ -197,20 +247,9 @@ Requirements:
         result = self.model.generate_content(self._prepare_prompt(user, prompt, context))
         reply = result.text
         
-        try:
-            import json
-            import re
-            # Extract JSON from response (Gemini might add extra text)
-            json_match = re.search(r'\{.*\}', reply, re.DOTALL)
-            if json_match:
-                result_data = json.loads(json_match.group(0))
-                return {
-                    "tips": result_data.get("tips", []),
-                    "strategy": result_data.get("strategy", "Active Recall"),
-                    "rationale": result_data.get("rationale", "Evidence-based study methods improve retention and efficiency.")
-                }
-        except (json.JSONDecodeError, KeyError, AttributeError):
-            pass
+        parsed_result = self._parse_preparation_response(reply)
+        if parsed_result:
+            return parsed_result
         
         # Fallback if JSON parsing fails
         tips = [line.strip("-• ") for line in reply.splitlines() if line.strip() and not line.strip().startswith("{")]
@@ -282,7 +321,7 @@ Return JSON format:
         try:
             import json
             import re
-            json_match = re.search(r'\{.*\}', reply, re.DOTALL)
+            json_match = re.search(self.JSON_EXTRACTION_PATTERN, reply, re.DOTALL)
             if json_match:
                 result_data = json.loads(json_match.group(0))
                 insights = result_data.get("insights", [])
@@ -466,4 +505,138 @@ If the schedule is already well-optimized, provide a specific positive explanati
             "explanation": "Schedule review completed. The current schedule is well-structured.",
             "overall_impact": "positive"
         }
+    
+    def generate_daily_summary(
+        self, user: User, daily_context: dict[str, Any], context: dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate automatic end-of-day summary and feedback based on the day's activity."""
+        completed_sessions = daily_context.get("completed_sessions", [])
+        completed_tasks = daily_context.get("completed_tasks", [])
+        total_minutes = daily_context.get("total_minutes", 0)
+        energy_level = daily_context.get("energy_level", "medium")
+        tasks_tomorrow = daily_context.get("tasks_tomorrow", [])
+        
+        sessions_count = len(completed_sessions)
+        tasks_count = len(completed_tasks)
+        hours = total_minutes / 60
+        
+        prompt = f"""Generate a brief, encouraging end-of-day summary for a student. Be specific, warm, and actionable.
+
+Today's Activity:
+- Completed {sessions_count} study session(s) ({hours:.1f} hours total)
+- Finished {tasks_count} task(s)
+- Energy level: {energy_level}
+- Upcoming tomorrow: {len(tasks_tomorrow)} task(s) due
+
+Your role:
+1. Celebrate what was accomplished (be genuine, not overdone)
+2. Note any patterns (e.g., "You were most productive in the morning")
+3. Provide one specific tip for tomorrow based on today's performance
+4. Keep it concise (2-3 sentences for summary, 1 sentence for tomorrow's tip)
+
+Return JSON format:
+{{
+  "summary": "Brief narrative summary of the day (2-3 sentences)",
+  "tomorrow_tip": "One actionable tip for tomorrow based on today's patterns",
+  "tone": "positive|neutral|encouraging"
+}}"""
+
+        if not self.model:
+            return {
+                "summary": f"You completed {sessions_count} session(s) today totaling {hours:.1f} hours. {'Great work staying consistent!' if sessions_count > 0 else 'Consider scheduling some study time tomorrow.'}",
+                "tomorrow_tip": f"You have {len(tasks_tomorrow)} task(s) coming up - start with the most urgent one tomorrow morning when your energy is highest.",
+                "tone": "positive" if sessions_count > 0 else "encouraging"
+            }
+        
+        try:
+            import json
+            import re
+            full_prompt = self._prepare_prompt(user, prompt, context)
+            result = self.model.generate_content(full_prompt)
+            reply = result.text
+            
+            # Extract JSON from response
+            json_match = re.search(self.JSON_EXTRACTION_PATTERN, reply, re.DOTALL)
+            if json_match:
+                result_data = json.loads(json_match.group(0))
+                return {
+                    "summary": result_data.get("summary", f"You completed {sessions_count} session(s) today totaling {hours:.1f} hours."),
+                    "tomorrow_tip": result_data.get("tomorrow_tip", f"You have {len(tasks_tomorrow)} task(s) coming up - start with the most urgent one tomorrow morning."),
+                    "tone": result_data.get("tone", "positive" if sessions_count > 0 else "encouraging")
+                }
+        except (json.JSONDecodeError, KeyError, AttributeError):
+            pass
+        
+        # Fallback if parsing fails
+        return {
+            "summary": f"You completed {sessions_count} session(s) today totaling {hours:.1f} hours. {'Great work staying consistent!' if sessions_count > 0 else 'Consider scheduling some study time tomorrow.'}",
+            "tomorrow_tip": f"You have {len(tasks_tomorrow)} task(s) coming up - start with the most urgent one tomorrow morning when your energy is highest.",
+            "tone": "positive" if sessions_count > 0 else "encouraging"
+        }
+    
+    def get_session_encouragement(
+        self, user: User, session_context: dict[str, Any], context: dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate encouraging, motivational messages during a focus session."""
+        elapsed_minutes = session_context.get("elapsed_minutes", 0)
+        remaining_minutes = session_context.get("remaining_minutes", 0)
+        progress_percent = session_context.get("progress_percent", 0)
+        task_title = session_context.get("task_title", "your work")
+        is_paused = session_context.get("is_paused", False)
+        pomodoro_count = session_context.get("pomodoro_count", 0)
+        
+        milestone = None
+        if progress_percent >= 75:
+            milestone = "almost_done"
+        elif progress_percent >= 50:
+            milestone = "halfway"
+        elif progress_percent >= 25:
+            milestone = "quarter"
+        elif elapsed_minutes > 0:
+            milestone = "started"
+        
+        prompt = f"""Generate a brief, encouraging message for a student during a focus session. Be warm, specific, and motivating.
+
+Session Context:
+- Task: {task_title}
+- Elapsed: {elapsed_minutes} minutes
+- Remaining: {remaining_minutes} minutes
+- Progress: {progress_percent}%
+- Status: {"Paused" if is_paused else "Active"}
+- Pomodoro: {pomodoro_count}/4 (if applicable)
+
+Milestone: {milestone}
+
+Return JSON format:
+{{
+  "message": "Brief encouraging message (1-2 sentences)",
+  "tone": "motivational|celebratory|supportive"
+}}"""
+
+        if not self.model:
+            if milestone == "almost_done":
+                return {"message": f"You're almost there! Just {remaining_minutes} minutes left. You've got this!", "tone": "motivational"}
+            elif milestone == "halfway":
+                return {"message": "You're halfway through! Keep that momentum going.", "tone": "supportive"}
+            elif milestone == "quarter":
+                return {"message": "Great start! You're making solid progress.", "tone": "motivational"}
+            else:
+                return {"message": "Stay focused! Every minute counts toward your goal.", "tone": "supportive"}
+
+        try:
+            result = self.model.generate_content(self._prepare_prompt(user, prompt, context))
+            reply = result.text
+            import json
+            import re
+            json_match = re.search(self.JSON_EXTRACTION_PATTERN, reply, re.DOTALL)
+            if json_match:
+                reply_dict = json.loads(json_match.group())
+                return {
+                    "message": reply_dict.get("message", "Keep going! You're doing great."),
+                    "tone": reply_dict.get("tone", "motivational")
+                }
+        except Exception:
+            pass
+
+        return {"message": "Stay focused! You're making progress.", "tone": "supportive"}
 

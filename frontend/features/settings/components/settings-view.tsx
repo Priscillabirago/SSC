@@ -23,17 +23,115 @@ import { changePassword, resetPassword, changeEmail } from "@/features/auth/api"
 
 const timezones = [
   "UTC",
+  // Americas
   "America/New_York",
   "America/Chicago",
   "America/Denver",
   "America/Los_Angeles",
+  "America/Phoenix",
+  "America/Anchorage",
+  "America/Toronto",
+  "America/Vancouver",
+  "America/Mexico_City",
+  "America/Sao_Paulo",
+  "America/Buenos_Aires",
+  // Europe
   "Europe/London",
+  "Europe/Paris",
   "Europe/Berlin",
+  "Europe/Rome",
+  "Europe/Madrid",
+  "Europe/Amsterdam",
+  "Europe/Stockholm",
+  "Europe/Zurich",
+  "Europe/Vienna",
+  "Europe/Dublin",
+  "Europe/Lisbon",
+  "Europe/Athens",
+  "Europe/Moscow",
+  // Asia
+  "Asia/Dubai",
+  "Asia/Karachi",
+  "Asia/Kolkata",
+  "Asia/Dhaka",
+  "Asia/Bangkok",
   "Asia/Singapore",
-  "Asia/Tokyo"
+  "Asia/Hong_Kong",
+  "Asia/Shanghai",
+  "Asia/Seoul",
+  "Asia/Tokyo",
+  "Asia/Manila",
+  "Asia/Jakarta",
+  // Oceania
+  "Australia/Sydney",
+  "Australia/Melbourne",
+  "Australia/Brisbane",
+  "Australia/Perth",
+  "Pacific/Auckland",
+  // Africa
+  "Africa/Cairo",
+  "Africa/Johannesburg",
+  "Africa/Lagos",
 ];
 
 const studyWindows: StudyWindow[] = ["morning", "afternoon", "evening", "night"];
+
+// Helper to get friendly timezone label
+function getTimezoneLabel(tz: string): string {
+  const labels: Record<string, string> = {
+    "UTC": "UTC (Coordinated Universal Time)",
+    // Americas
+    "America/New_York": "Eastern Time (ET)",
+    "America/Chicago": "Central Time (CT)",
+    "America/Denver": "Mountain Time (MT)",
+    "America/Los_Angeles": "Pacific Time (PT)",
+    "America/Phoenix": "Mountain Time - Arizona (MST)",
+    "America/Anchorage": "Alaska Time (AKT)",
+    "America/Toronto": "Eastern Time - Toronto (ET)",
+    "America/Vancouver": "Pacific Time - Vancouver (PT)",
+    "America/Mexico_City": "Central Time - Mexico (CST)",
+    "America/Sao_Paulo": "Brasília Time (BRT)",
+    "America/Buenos_Aires": "Argentina Time (ART)",
+    // Europe
+    "Europe/London": "London (GMT/BST)",
+    "Europe/Paris": "Central European Time (CET)",
+    "Europe/Berlin": "Central European Time - Berlin (CET)",
+    "Europe/Rome": "Central European Time - Rome (CET)",
+    "Europe/Madrid": "Central European Time - Madrid (CET)",
+    "Europe/Amsterdam": "Central European Time - Amsterdam (CET)",
+    "Europe/Stockholm": "Central European Time - Stockholm (CET)",
+    "Europe/Zurich": "Central European Time - Zurich (CET)",
+    "Europe/Vienna": "Central European Time - Vienna (CET)",
+    "Europe/Dublin": "Dublin (GMT/IST)",
+    "Europe/Lisbon": "Western European Time - Lisbon (WET)",
+    "Europe/Athens": "Eastern European Time - Athens (EET)",
+    "Europe/Moscow": "Moscow Time (MSK)",
+    // Asia
+    "Asia/Dubai": "Gulf Standard Time (GST)",
+    "Asia/Karachi": "Pakistan Standard Time (PKT)",
+    "Asia/Kolkata": "India Standard Time (IST)",
+    "Asia/Dhaka": "Bangladesh Standard Time (BST)",
+    "Asia/Bangkok": "Indochina Time (ICT)",
+    "Asia/Singapore": "Singapore Time (SGT)",
+    "Asia/Hong_Kong": "Hong Kong Time (HKT)",
+    "Asia/Shanghai": "China Standard Time (CST)",
+    "Asia/Seoul": "Korea Standard Time (KST)",
+    "Asia/Tokyo": "Japan Standard Time (JST)",
+    "Asia/Manila": "Philippine Time (PHT)",
+    "Asia/Jakarta": "Western Indonesia Time (WIB)",
+    // Oceania
+    "Australia/Sydney": "Australian Eastern Time (AET)",
+    "Australia/Melbourne": "Australian Eastern Time - Melbourne (AET)",
+    "Australia/Brisbane": "Australian Eastern Time - Brisbane (AET)",
+    "Australia/Perth": "Australian Western Time (AWST)",
+    "Pacific/Auckland": "New Zealand Time (NZST)",
+    // Africa
+    "Africa/Cairo": "Eastern European Time - Cairo (EET)",
+    "Africa/Johannesburg": "South Africa Standard Time (SAST)",
+    "Africa/Lagos": "West Africa Time (WAT)",
+  };
+  return labels[tz] || tz;
+}
 
 // Helper to parse windows from profile (handles both old and new formats)
 function parseWindowsFromProfile(windows: any): { presets: StudyWindow[]; customs: CustomTimeRange[] } {
@@ -71,14 +169,41 @@ export function SettingsView() {
   const { data: todayEnergy } = useTodayEnergy();
   const [selectedPresets, setSelectedPresets] = useState<StudyWindow[]>([]);
   const [customRanges, setCustomRanges] = useState<CustomTimeRange[]>([]);
+  const [selectedTimezone, setSelectedTimezone] = useState<string>("UTC");
 
   useEffect(() => {
     if (profile) {
       const parsed = parseWindowsFromProfile(profile.preferred_study_windows);
       setSelectedPresets(parsed.presets);
       setCustomRanges(parsed.customs);
+      setSelectedTimezone(profile.timezone || "UTC");
     }
   }, [profile]);
+
+  const handleUseCurrentTimezone = () => {
+    try {
+      const detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (timezones.includes(detectedTimezone)) {
+        setSelectedTimezone(detectedTimezone);
+        toast({
+          title: "Timezone updated",
+          description: `Set to ${getTimezoneLabel(detectedTimezone)}`,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Timezone not supported",
+          description: `Detected timezone "${detectedTimezone}" is not in our list. Please select manually.`,
+        });
+      }
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Detection failed",
+        description: "Could not detect your timezone. Please select manually.",
+      });
+    }
+  };
 
   const handleToggleWindow = (window: StudyWindow, checked: boolean) => {
     setSelectedPresets((prev) => {
@@ -109,10 +234,12 @@ export function SettingsView() {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const fullNameEntry = formData.get("fullName");
-    const timezoneEntry = formData.get("timezone");
     if (!profile) {
       return;
     }
+    
+    // Use selectedTimezone state instead of formData (since Select might not update formData properly)
+    const timezoneToUse = selectedTimezone || profile.timezone;
     
     // Build windows array in new format
     const windows: StudyWindowConfig[] = [
@@ -123,7 +250,7 @@ export function SettingsView() {
     updateProfile.mutate(
       {
         full_name: typeof fullNameEntry === "string" ? fullNameEntry : "",
-        timezone: typeof timezoneEntry === "string" ? timezoneEntry : profile.timezone,
+        timezone: timezoneToUse,
         weekly_study_hours: Number(formData.get("weeklyHours")),
         max_session_length: Number(formData.get("maxSession")),
         break_duration: Number(formData.get("breakDuration")),
@@ -146,9 +273,9 @@ export function SettingsView() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="min-w-0">
         <div>
-          <h1 className="text-2xl font-semibold text-foreground">Settings</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Settings</h1>
           <p className="text-xs text-muted-foreground/80 mt-1">
             💡 <strong>First time?</strong> Configure your timezone, weekly study hours, and preferred study times to get personalized schedules.
           </p>
@@ -157,7 +284,7 @@ export function SettingsView() {
           Tune how the AI coach plans your study time and tracks your energy.
         </p>
       </div>
-      <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-6">
           <Card>
             <CardHeader>
@@ -180,18 +307,28 @@ export function SettingsView() {
                 </div>
                 <div className="space-y-2">
                   <Label>Timezone</Label>
-                  <Select defaultValue={profile.timezone} name="timezone">
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {timezones.map((zone) => (
-                        <SelectItem key={zone} value={zone}>
-                          {zone}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex gap-2">
+                    <Select value={selectedTimezone} onValueChange={setSelectedTimezone} name="timezone">
+                      <SelectTrigger className="flex-1">
+                        <SelectValue placeholder="Select timezone" />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-[300px]">
+                        {timezones.map((zone) => (
+                          <SelectItem key={zone} value={zone}>
+                            {getTimezoneLabel(zone)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleUseCurrentTimezone}
+                      className="flex-shrink-0"
+                    >
+                      Use current timezone
+                    </Button>
+                  </div>
                 </div>
               </div>
               <div className="grid gap-4 md:grid-cols-3">
@@ -328,7 +465,7 @@ export function SettingsView() {
                 </div>
                 <Switch name="energyTagging" defaultChecked={profile.energy_tagging_enabled} />
               </div>
-              <Button type="submit" className="w-full md:w-auto" disabled={updateProfile.isPending}>
+              <Button type="submit" className="w-full sm:w-auto" disabled={updateProfile.isPending}>
                 {updateProfile.isPending ? "Saving..." : "Save preferences"}
               </Button>
             </form>

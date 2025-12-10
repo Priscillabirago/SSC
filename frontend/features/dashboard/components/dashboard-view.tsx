@@ -11,6 +11,7 @@ import { TimeDistributionChart } from "@/features/dashboard/components/time-dist
 import { TodayPlanCard } from "@/features/dashboard/components/upcoming-tasks-card";
 import { AIInsightsCard } from "@/features/dashboard/components/ai-insights-card";
 import { GettingStartedGuide } from "@/features/dashboard/components/getting-started-guide";
+import { DailySummaryCard } from "@/features/dashboard/components/daily-summary-card";
 import { useAnalyticsOverview } from "@/features/dashboard/hooks";
 import { useSessions, useGenerateSchedule } from "@/features/schedule/hooks";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,7 +34,7 @@ export function DashboardView() {
     analytics.productivity_trend.every(t => t.completed_minutes === 0 && t.scheduled_minutes === 0);
 
   const handleGenerateSchedule = () => {
-    generateSchedule.mutate(undefined, {
+    generateSchedule.mutate(false, {
       onSuccess: () => {
         toast({
           title: "Schedule generated",
@@ -64,19 +65,19 @@ export function DashboardView() {
   if (hasNoData) {
     return (
       <div className="space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold text-foreground">Dashboard</h1>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Dashboard</h1>
             <p className="text-sm text-muted-foreground mt-1">
               Your personalized study companion. Follow the steps below to get started.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Button
               variant="outline"
               size="sm"
               onClick={() => router.push("/schedule")}
-              className="gap-2"
+              className="gap-2 flex-1 sm:flex-initial"
             >
               <Calendar className="h-4 w-4" />
               Schedule
@@ -85,7 +86,7 @@ export function DashboardView() {
               variant="outline"
               size="sm"
               onClick={() => router.push("/analytics")}
-              className="gap-2"
+              className="gap-2 flex-1 sm:flex-initial"
             >
               <BarChart3 className="h-4 w-4" />
               Analytics
@@ -113,32 +114,37 @@ export function DashboardView() {
       {/* Getting Started Guide - Show at top if not completed */}
       <GettingStartedGuide />
       
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Dashboard</h1>
+      {/* Daily Summary - Show in the morning */}
+      <DailySummaryCard />
+      
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Dashboard</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Quick overview of your study progress and today's focus.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             variant="outline"
             size="sm"
             onClick={handleGenerateSchedule}
             disabled={generateSchedule.isPending}
-            className="gap-2"
+            className="gap-2 flex-1 sm:flex-initial"
           >
             <Calendar className="h-4 w-4" />
-            {generateSchedule.isPending ? "Generating..." : "Generate Schedule"}
+            <span className="hidden sm:inline">{generateSchedule.isPending ? "Generating..." : "Generate Schedule"}</span>
+            <span className="sm:hidden">{generateSchedule.isPending ? "Generating..." : "Generate"}</span>
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => router.push("/analytics")}
-            className="gap-2"
+            className="gap-2 flex-1 sm:flex-initial"
           >
             <BarChart3 className="h-4 w-4" />
-            View Analytics
+            <span className="hidden sm:inline">View Analytics</span>
+            <span className="sm:hidden">Analytics</span>
           </Button>
         </div>
       </div>
@@ -150,11 +156,11 @@ export function DashboardView() {
         weeklyHoursCompleted={analytics.weekly_hours_completed}
         weeklyHoursTarget={analytics.weekly_hours_target}
       />
-      <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-[1.2fr_0.8fr]">
         <ProductivityTrendChart data={analytics.productivity_trend} />
         <TimeDistributionChart data={analytics.time_distribution} />
       </div>
-      <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-[1fr_1fr]">
         <TodayPlanCard
           todaySessions={analytics.today_plan.length > 0 ? analytics.today_plan : todaySessions}
         />

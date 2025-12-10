@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, Clock, Pencil, Search, Filter, X, PlayCircle, PauseCircle, ChevronDown, ChevronRight, Plus, Trash2, Repeat, Settings, Info, Calendar, ExternalLink, ListTodo, Edit2, GripVertical, ChevronUp } from "lucide-react";
+import { CheckCircle2, Clock, Pencil, Search, Filter, X, ChevronDown, ChevronRight, Plus, Trash2, Repeat, Settings, Info, Calendar, ExternalLink, ListTodo, Edit2, GripVertical, ChevronUp } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -30,12 +30,15 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatDate } from "@/lib/utils";
-import type { Subject, Subtask, Task, TaskStatus } from "@/lib/types";
+import { formatDate, formatTimer, localDateTimeToUTCISO } from "@/lib/utils";
+import type { Subject, Subtask, Task, TaskStatus, StudySession } from "@/lib/types";
 import { useDeleteTask, useGenerateSubtasks, useUpdateTask } from "@/features/tasks/hooks";
 import { useSessions } from "@/features/schedule/hooks";
 import { toast } from "@/components/ui/use-toast";
 import { ManageSeriesDialog } from "./manage-series-dialog";
+import { useFocusSession } from "@/contexts/focus-session-context";
+import { useQuickTrack } from "@/contexts/quick-track-context";
+import { StartTrackingButton } from "@/components/tracking/start-tracking-button";
 
 const priorityColor: Record<Task["priority"], string> = {
   low: "bg-slate-100 text-slate-600",
@@ -217,7 +220,7 @@ const SortableSubtaskItem = ({
                 </button>
                 {subtask.estimated_minutes && (
                   <span className="text-muted-foreground text-[10px] whitespace-nowrap">
-                    ({subtask.estimated_minutes} min)
+                    ({formatTimer(subtask.estimated_minutes)})
                   </span>
                 )}
               </div>
@@ -358,6 +361,8 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   const deleteTask = useDeleteTask();
   const generateSubtasks = useGenerateSubtasks();
   const { data: sessions } = useSessions();
+  const { startSession } = useFocusSession();
+  const { stopQuickTrack, isActive: isQuickTrackActive, getElapsedTime } = useQuickTrack();
   const [editId, setEditId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Partial<Task>>({});
   const [editAllFuture, setEditAllFuture] = useState(false);
@@ -377,7 +382,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   );
   const [manageSeriesOpen, setManageSeriesOpen] = useState(false);
   const [selectedInstanceForSeries, setSelectedInstanceForSeries] = useState<Task | null>(null);
-  const [filtersExpanded, setFiltersExpanded] = useState(true);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["today"]));
   const [completedSectionExpanded, setCompletedSectionExpanded] = useState(true);
   const [showAllCompleted, setShowAllCompleted] = useState(false);
@@ -487,13 +492,23 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     }
   };
   
-  const formatTimer = (minutes: number): string => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    if (hours > 0) {
-      return `${hours}h ${mins}m`;
-    }
-    return `${mins}m`;
+
+  // Helper: Create a temporary session from a task for focus mode
+  const createSessionFromTask = (task: Task): StudySession => {
+    const now = new Date();
+    const duration = task.estimated_minutes || 60; // Default to 60 minutes if no estimate
+    const endTime = new Date(now.getTime() + duration * 60 * 1000);
+    
+    return {
+      id: -1, // Temporary ID
+      user_id: 0, // Will be set by backend if needed
+      task_id: task.id,
+      subject_id: task.subject_id || null,
+      start_time: now.toISOString(),
+      end_time: endTime.toISOString(),
+      status: "planned",
+      focus: task.title,
+    };
   };
 
   // Helper function to handle task completion checkbox
@@ -528,16 +543,6 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     return deadline.toISOString().slice(0, 10);
   };
 
-  // Helper: Create date object from date part
-  const createDateFromParts = (datePart: string, hours: number, minutes: number): Date | null => {
-    const dateObj = new Date();
-    dateObj.setFullYear(Number.parseInt(datePart.slice(0, 4), 10));
-    dateObj.setMonth(Number.parseInt(datePart.slice(5, 7), 10) - 1);
-    dateObj.setDate(Number.parseInt(datePart.slice(8, 10), 10));
-    dateObj.setHours(hours, minutes, 0, 0);
-    return Number.isFinite(dateObj.getTime()) ? dateObj : null;
-  };
-
   // Helper: Process deadline with optional time
   const processDeadline = (payload: Partial<Task>, taskId: number): void => {
     if (payload.deadline === undefined || payload.deadline === null) return;
@@ -547,17 +552,24 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     
     if (!datePart || !/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return;
     
+    // Parse date components
+    const year = Number.parseInt(datePart.slice(0, 4), 10);
+    const month = Number.parseInt(datePart.slice(5, 7), 10);
+    const day = Number.parseInt(datePart.slice(8, 10), 10);
+    
     if (timeInfo?.useTime && timeInfo.time && /^\d{2}:\d{2}$/.test(timeInfo.time)) {
-      const [hours, minutes] = timeInfo.time.split(':').map(Number);
-      const dateObj = createDateFromParts(datePart, hours, minutes);
-      if (dateObj) {
-        payload.deadline = dateObj.toISOString();
+      const timeParts = timeInfo.time.split(':');
+      if (timeParts.length >= 2) {
+        const [hours, minutes] = timeParts.map(Number);
+        // Use utility function to preserve date component when converting to UTC
+        payload.deadline = localDateTimeToUTCISO(year, month, day, hours, minutes);
+      } else {
+        // Fallback to end of day if time parsing fails
+        payload.deadline = localDateTimeToUTCISO(year, month, day, 23, 59);
       }
     } else {
-      const dateObj = createDateFromParts(datePart, 23, 59);
-      if (dateObj) {
-        payload.deadline = dateObj.toISOString();
-      }
+      // Use utility function to preserve date component when converting to UTC
+      payload.deadline = localDateTimeToUTCISO(year, month, day, 23, 59);
     }
   };
 
@@ -733,10 +745,10 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     const totalActual = task.total_minutes_spent ?? ((task.actual_minutes_spent ?? 0) + (task.timer_minutes_spent ?? 0)) + currentElapsed;
     const displayActual = totalActual > 0 ? totalActual : (task.total_minutes_spent ?? task.actual_minutes_spent);
     
-    if (displayActual != null) {
+    if (displayActual != null && displayActual > 0) {
       return (
         <span className={displayActual > task.estimated_minutes ? "text-red-600" : "text-green-600"}>
-          {" "}• Actual: {displayActual} min
+          {" "}• Actual: {formatTimer(displayActual)}
         </span>
       );
     }
@@ -1156,8 +1168,10 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   
   const grouped = useMemo(() => {
     const upcoming = filteredAndSorted.filter((task) => !task.is_completed);
-    // Sort completed tasks by most recently updated first (most recent completion at top)
+    // Sort completed tasks by most recently completed first
     const getTaskTime = (task: Task): number => {
+      // Prefer completed_at (when task was actually completed) over updated_at
+      if (task.completed_at) return new Date(task.completed_at).getTime();
       if (task.updated_at) return new Date(task.updated_at).getTime();
       if (task.created_at) return new Date(task.created_at).getTime();
       return 0;
@@ -1165,7 +1179,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     const completed = filteredAndSorted
       .filter((task) => task.is_completed)
       .sort((a, b) => {
-        // Sort by updated_at if available, otherwise by created_at
+        // Sort by completed_at if available, otherwise by updated_at, then created_at
         const aTime = getTaskTime(a);
         const bTime = getTaskTime(b);
         return bTime - aTime; // Most recent first
@@ -1235,8 +1249,8 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Badge variant="outline" className="h-4 px-1.5 text-[9px] border-blue-200 text-blue-600 bg-blue-50 cursor-help">
-              <Clock className="h-2.5 w-2.5 mr-0.5" />
+            <Badge variant="outline" className="h-5 min-h-5 px-3 text-[10px] font-medium border-blue-200 text-blue-600 bg-blue-50 cursor-help inline-flex items-center gap-1.5 whitespace-nowrap">
+              <Clock className="h-3 w-3 shrink-0" />
               {sessionCount} session{sessionCount === 1 ? "" : "s"}
             </Badge>
           </TooltipTrigger>
@@ -1252,21 +1266,22 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   const renderTaskTitle = (task: Task, isEditing: boolean) => {
     if (isEditing) {
       return (
-                        <Input
-                          className="h-8 w-40 text-xs mr-2"
-                          value={draft.title ?? task.title}
-                          onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
-                        />
+        <Input
+          className="h-8 flex-1 min-w-[200px] text-xs"
+          value={draft.title ?? task.title}
+          onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+          placeholder="Task title"
+        />
       );
     }
     return (
-      <>
-        <div className="flex items-center gap-1.5">
-          <ListTodo className="h-3.5 w-3.5 text-blue-500" />
-                        <p className="text-sm font-medium text-foreground">{task.title}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <ListTodo className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+          <p className="text-sm font-medium text-foreground truncate">{task.title}</p>
           {task.is_recurring_template && (
-            <Badge variant="outline" className="h-4 px-1.5 text-[9px] border-purple-300 text-purple-700 bg-purple-50">
-              <Repeat className="h-2.5 w-2.5 mr-0.5" />
+            <Badge variant="outline" className="h-5 px-2 text-[10px] font-medium border-purple-300 text-purple-700 bg-purple-50 flex items-center gap-1 shrink-0">
+              <Repeat className="h-3 w-3" />
               Recurring
             </Badge>
           )}
@@ -1274,8 +1289,8 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Badge variant="outline" className="h-4 px-1.5 text-[9px] border-purple-200 text-purple-600 bg-purple-50/50 cursor-help">
-                    <Repeat className="h-2.5 w-2.5 mr-0.5" />
+                  <Badge variant="outline" className="h-5 px-2 text-[10px] font-medium border-purple-200 text-purple-600 bg-purple-50/50 cursor-help flex items-center gap-1 shrink-0">
+                    <Repeat className="h-3 w-3" />
                   </Badge>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -1285,22 +1300,24 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
             </TooltipProvider>
           )}
         </div>
-        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${priorityColor[task.priority]}`}>
-                        {task.priority}
-                      </span>
-        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusColor[task.status]}`}>
-          {statusLabel[task.status]}
-        </span>
-        {renderSessionCountBadge(task.id)}
-      </>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Badge variant="outline" className={`h-5 min-h-5 px-3 text-[10px] font-semibold uppercase tracking-wide whitespace-nowrap shrink-0 ${priorityColor[task.priority]}`}>
+            {task.priority}
+          </Badge>
+          <Badge variant="outline" className={`h-5 min-h-5 px-3 text-[10px] font-semibold whitespace-nowrap shrink-0 ${statusColor[task.status]}`}>
+            {statusLabel[task.status]}
+          </Badge>
+          {renderSessionCountBadge(task.id)}
+        </div>
+      </div>
     );
   };
 
   // Helper: Render editing form
   const renderEditingForm = (task: Task) => (
-    <>
+    <div className="w-full space-y-3">
       {task.recurring_template_id && !task.is_recurring_template && (
-        <div className="w-full mb-2 space-y-1">
+        <div className="w-full space-y-1">
           <div className="flex items-center gap-2 px-2 py-1 bg-purple-50 border border-purple-200 rounded text-[10px]">
             <Checkbox
               id={`edit-all-future-${task.id}`}
@@ -1327,146 +1344,219 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
           </div>
         </div>
       )}
-                          <Select
-                            value={(() => {
-                              const currentSubjectId = draft.subject_id ?? task.subject_id;
-                              return currentSubjectId ? String(currentSubjectId) : "general";
-                            })()}
-                            onValueChange={v => setDraft((d) => ({ ...d, subject_id: v === "general" ? null : Number(v) }))}
-                          >
-                            <SelectTrigger className="h-7 w-28 text-xs">
-                              <SelectValue placeholder="General" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="general">General</SelectItem>
-                              {subjects.map((s) => (
-                                <SelectItem key={s.id} value={String(s.id)}>
-                                  {s.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Select
-                            value={draft.priority ?? task.priority}
-                            onValueChange={v => setDraft((d) => ({ ...d, priority: v as Task["priority"] }))}
-                          >
-                            <SelectTrigger className="h-7 w-20 text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="low">Low</SelectItem>
-                              <SelectItem value="medium">Medium</SelectItem>
-                              <SelectItem value="high">High</SelectItem>
-                              <SelectItem value="critical">Critical</SelectItem>
-                            </SelectContent>
-                          </Select>
-      <Select
-        value={draft.status ?? task.status}
-        onValueChange={v => setDraft((d) => ({ ...d, status: v as TaskStatus }))}
-      >
-        <SelectTrigger className="h-7 w-28 text-xs">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="todo">To Do</SelectItem>
-          <SelectItem value="in_progress">In Progress</SelectItem>
-          <SelectItem value="blocked">Blocked</SelectItem>
-          <SelectItem value="on_hold">On Hold</SelectItem>
-          <SelectItem value="completed">Completed</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <Input
-                            className="h-7 w-24 text-xs"
-                            type="number"
-                            value={draft.estimated_minutes ?? task.estimated_minutes}
-                            onChange={e => setDraft((d) => ({ ...d, estimated_minutes: Number(e.target.value) }))}
-        placeholder="Est. min"
-                          />
-                          <Input
-        className="h-7 w-24 text-xs"
-        type="number"
-        value={draft.actual_minutes_spent ?? task.actual_minutes_spent ?? ""}
-        onChange={e => setDraft((d) => ({ ...d, actual_minutes_spent: e.target.value ? Number(e.target.value) : null }))}
-        placeholder="Actual min"
-      />
-      <div className="flex items-center gap-1">
-        <Input
-          className="h-7 w-32 text-xs"
-                            type="date"
-                            value={(() => {
-                              const deadlineStr = draft.deadline || task.deadline;
-                              if (!deadlineStr) return "";
-                              // Parse as UTC, then convert to local date for the input
-                              let deadlineDate: Date;
-                              if (deadlineStr.includes('Z') || deadlineStr.includes('+') || deadlineStr.includes('-', 10)) {
-                                deadlineDate = new Date(deadlineStr);
-                              } else {
-                                deadlineDate = new Date(deadlineStr + 'Z');
-                              }
-                              // Format as YYYY-MM-DD in local timezone
-                              const year = deadlineDate.getFullYear();
-                              const month = String(deadlineDate.getMonth() + 1).padStart(2, '0');
-                              const day = String(deadlineDate.getDate()).padStart(2, '0');
-                              return `${year}-${month}-${day}`;
-                            })()}
-                            onChange={e => setDraft((d) => ({ ...d, deadline: e.target.value }))}
-                            placeholder="Due date"
-                          />
-        <Checkbox
-          className="h-4 w-4"
-          checked={editDeadlineTime.get(task.id)?.useTime ?? false}
-          onCheckedChange={(checked) => {
+      
+      {/* First row: Category, Priority, Status */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col gap-1">
+          <Label className="text-[10px] text-muted-foreground">Category</Label>
+          <Select
+            value={(() => {
+              const currentSubjectId = draft.subject_id ?? task.subject_id;
+              return currentSubjectId ? String(currentSubjectId) : "general";
+            })()}
+            onValueChange={v => setDraft((d) => ({ ...d, subject_id: v === "general" ? null : Number(v) }))}
+          >
+            <SelectTrigger className="h-7 w-28 text-xs">
+              <SelectValue placeholder="General" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="general">General</SelectItem>
+              {subjects.map((s) => (
+                <SelectItem key={s.id} value={String(s.id)}>
+                  {s.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        
+        <div className="flex flex-col gap-1">
+          <Label className="text-[10px] text-muted-foreground">Priority</Label>
+          <Select
+            value={draft.priority ?? task.priority}
+            onValueChange={v => setDraft((d) => ({ ...d, priority: v as Task["priority"] }))}
+          >
+            <SelectTrigger className="h-7 w-24 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="low">Low</SelectItem>
+              <SelectItem value="medium">Medium</SelectItem>
+              <SelectItem value="high">High</SelectItem>
+              <SelectItem value="critical">Critical</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        
+        <div className="flex flex-col gap-1">
+          <Label className="text-[10px] text-muted-foreground">Status</Label>
+          <Select
+            value={draft.status ?? task.status}
+            onValueChange={v => setDraft((d) => ({ ...d, status: v as TaskStatus }))}
+          >
+            <SelectTrigger className="h-7 w-28 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="todo">To Do</SelectItem>
+              <SelectItem value="in_progress">In Progress</SelectItem>
+              <SelectItem value="blocked">Blocked</SelectItem>
+              <SelectItem value="on_hold">On Hold</SelectItem>
+              <SelectItem value="completed">Completed</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      
+      {/* Second row: Time estimates */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col gap-1">
+          <Label className="text-[10px] text-muted-foreground">Est. (min)</Label>
+          <Input
+            className="h-7 w-24 text-xs"
+            type="number"
+            min="0"
+            value={draft.estimated_minutes ?? task.estimated_minutes ?? ""}
+            onChange={e => setDraft((d) => ({ ...d, estimated_minutes: e.target.value ? Number(e.target.value) : undefined }))}
+            placeholder="0"
+          />
+        </div>
+        
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-1">
+            <Label className="text-[10px] text-muted-foreground">Actual (min)</Label>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="h-3 w-3 text-muted-foreground cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="max-w-xs">
+                    Actual time is automatically calculated from completed study sessions and cannot be manually edited.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+          <Input
+            className="h-7 w-24 text-xs bg-muted/50 cursor-not-allowed"
+            type="number"
+            min="0"
+            value={task.actual_minutes_spent ?? ""}
+            disabled
+            placeholder="Auto"
+            readOnly
+          />
+        </div>
+      </div>
+      
+      {/* Third row: Deadline */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col gap-1">
+          <Label className="text-[10px] text-muted-foreground">Due Date</Label>
+          <div className="flex items-center gap-1.5">
+            <Input
+              className="h-7 w-36 text-xs"
+              type="date"
+              value={(() => {
+                const deadlineStr = draft.deadline || task.deadline;
+                if (!deadlineStr) return "";
+                // Parse as UTC, then convert to local date for the input
+                let deadlineDate: Date;
+                if (deadlineStr.includes('Z') || deadlineStr.includes('+') || deadlineStr.includes('-', 10)) {
+                  deadlineDate = new Date(deadlineStr);
+                } else {
+                  deadlineDate = new Date(deadlineStr + 'Z');
+                }
+                // Format as YYYY-MM-DD in local timezone
+                const year = deadlineDate.getFullYear();
+                const month = String(deadlineDate.getMonth() + 1).padStart(2, '0');
+                const day = String(deadlineDate.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+              })()}
+              onChange={e => setDraft((d) => ({ ...d, deadline: e.target.value }))}
+              placeholder="Due date"
+            />
+            <div className="flex items-center gap-1.5">
+              <Checkbox
+                id={`deadline-time-${task.id}`}
+                className="h-4 w-4"
+                checked={editDeadlineTime.get(task.id)?.useTime ?? false}
+                onCheckedChange={(checked) => {
+                  setEditDeadlineTime(prev => {
+                    const next = new Map(prev);
+                    const current = next.get(task.id) || { useTime: false, time: "" };
+                    next.set(task.id, { ...current, useTime: checked === true });
+                    return next;
+                  });
+                }}
+              />
+              <Label htmlFor={`deadline-time-${task.id}`} className="text-[10px] text-muted-foreground cursor-pointer whitespace-nowrap">
+                Time
+              </Label>
+            </div>
+            {editDeadlineTime.get(task.id)?.useTime && (
+              <Input
+                className="h-7 w-24 text-xs"
+                type="time"
+                value={editDeadlineTime.get(task.id)?.time || (task.deadline ? (() => {
+                  // Parse deadline as UTC, then format in local time
+                  let deadlineDate: Date;
+                  if (task.deadline.includes('Z') || task.deadline.includes('+') || task.deadline.includes('-', 10)) {
+                    deadlineDate = new Date(task.deadline);
+                  } else {
+                    deadlineDate = new Date(task.deadline + 'Z');
+                  }
+                  return deadlineDate.toLocaleTimeString('en-US', { 
+                    hour: '2-digit', 
+                    minute: '2-digit', 
+                    hour12: false 
+                  });
+                })() : "")}
+                onChange={e => {
+                  setEditDeadlineTime(prev => {
+                    const next = new Map(prev);
+                    const current = next.get(task.id) || { useTime: true, time: "" };
+                    next.set(task.id, { ...current, time: e.target.value });
+                    return next;
+                  });
+                }}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+      
+      {/* Action buttons */}
+      <div className="flex items-center gap-2 pt-1">
+        <Button size="sm" className="h-7 text-xs" onClick={() => handleTaskSave(task)}>
+          Save
+        </Button>
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          className="h-7 text-xs" 
+          onClick={() => {
+            setEditId(null); 
+            setDraft({});
             setEditDeadlineTime(prev => {
               const next = new Map(prev);
-              const current = next.get(task.id) || { useTime: false, time: "" };
-              next.set(task.id, { ...current, useTime: checked === true });
+              next.delete(task.id);
               return next;
             });
           }}
-        />
-        {editDeadlineTime.get(task.id)?.useTime && (
-          <Input
-            className="h-7 w-20 text-xs"
-            type="time"
-            value={editDeadlineTime.get(task.id)?.time || (task.deadline ? (() => {
-              // Parse deadline as UTC, then format in local time
-              let deadlineDate: Date;
-              if (task.deadline.includes('Z') || task.deadline.includes('+') || task.deadline.includes('-', 10)) {
-                deadlineDate = new Date(task.deadline);
-              } else {
-                deadlineDate = new Date(task.deadline + 'Z');
-              }
-              return deadlineDate.toLocaleTimeString('en-US', { 
-                hour: '2-digit', 
-                minute: '2-digit', 
-                hour12: false 
-              });
-            })() : "")}
-            onChange={e => {
-              setEditDeadlineTime(prev => {
-                const next = new Map(prev);
-                const current = next.get(task.id) || { useTime: true, time: "" };
-                next.set(task.id, { ...current, time: e.target.value });
-                return next;
-              });
-            }}
-          />
-        )}
+        >
+          Cancel
+        </Button>
       </div>
-      <Button size="sm" className="h-7 text-xs ml-2" onClick={() => handleTaskSave(task)}>
-                            Save
-                          </Button>
-                          <Button variant="ghost" size="sm" className="h-7 text-xs ml-1" onClick={() => {
-                            setEditId(null); setDraft({});
-                          }}>Cancel</Button>
-                        </>
+    </div>
   );
 
   // Helper: Render task display view
   const renderTaskDisplay = (task: Task, subject: Subject | undefined) => (
-    <div className="flex flex-wrap gap-2 items-center">
-      <span>
-        Est: {task.estimated_minutes} min
+    <div className="flex flex-wrap gap-x-2 gap-y-1 items-center">
+      <span className="whitespace-nowrap">
+        Est: {formatTimer(task.estimated_minutes)}
         {renderActualTime(task)}
         {activeTimers.has(task.id) && (
           <span className="text-blue-600 font-medium animate-pulse">
@@ -1476,21 +1566,21 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
       </span>
       {task.deadline && (
         <>
-          <span>•</span>
-          <span className={getDeadlineStyle(task.deadline)}>
+          <span className="text-muted-foreground/60">•</span>
+          <span className={`whitespace-nowrap ${getDeadlineStyle(task.deadline)}`}>
             Due {formatDate(task.deadline)}
           </span>
         </>
       )}
-      <span>•</span>
-      <span>{subject ? subject.name : "General"}</span>
+      <span className="text-muted-foreground/60">•</span>
+      <span className="whitespace-nowrap">{subject ? subject.name : "General"}</span>
       {task.description && (
         <>
-          <span>•</span>
+          <span className="text-muted-foreground/60">•</span>
           <span className="text-xs italic truncate max-w-xs">{task.description}</span>
         </>
-                      )}
-                    </div>
+      )}
+    </div>
   );
 
 
@@ -1678,7 +1768,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
           <span className="flex-1 text-left">{progressText}</span>
           {totalEstimatedMinutes > 0 && (
             <span className="text-[10px] text-muted-foreground">
-              {totalEstimatedMinutes} min total
+              {formatTimer(totalEstimatedMinutes)} total
             </span>
           )}
         </button>
@@ -1714,7 +1804,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
 
   // Helper: Render action buttons
   const renderTaskActions = (task: Task) => (
-                  <div className="flex items-center gap-1 ml-2">
+                  <div className="flex items-center gap-1.5">
       {task.recurring_template_id && !task.is_recurring_template && (
         <TooltipProvider>
           <Tooltip>
@@ -1739,50 +1829,41 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
           </Tooltip>
         </TooltipProvider>
       )}
-      {task.status !== "completed" && task.status !== "in_progress" && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => {
-                  startTimer(task.id);
-                  updateTask.mutate(
-                    { id: task.id, payload: { status: "in_progress" } },
-                    { onSuccess: () => toast({ title: "Task started", description: "Timer is running..." }) }
-                  );
-                }}
-                aria-label="Start task"
-              >
-                <PlayCircle className="h-3 w-3 mr-1" />
-                Start
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Start working on this task and begin time tracking</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
-      {task.status === "in_progress" && (
-        <Button
-          variant="ghost"
+      {task.status !== "completed" && (
+        <StartTrackingButton
+          task={task}
+          subject={task.subject_id ? subjects.find((s) => s.id === task.subject_id) : null}
+          variant={task.status === "in_progress" ? "outline" : "default"}
           size="sm"
           className="h-7 text-xs"
-          onClick={() => {
-            stopTimer(task.id, true);
+          onFocusSessionStart={() => {
+            const taskSubject = task.subject_id ? subjects.find((s) => s.id === task.subject_id) : null;
+            // Calculate Quick Track time to preserve
+            const quickTrackTimeMs = isQuickTrackActive(task.id)
+              ? getElapsedTime(task.id) * 60 * 1000
+              : 0;
+            
+            // If Quick Track is active, stop it first (but preserve time)
+            if (isQuickTrackActive(task.id)) {
+              const elapsed = stopQuickTrack(task.id, true);
+              // Update task timer
+              const currentTimer = task.timer_minutes_spent ?? 0;
+              updateTask.mutate({
+                id: task.id,
+                payload: {
+                  timer_minutes_spent: currentTimer + elapsed,
+                  status: "in_progress",
+                },
+              });
+            }
+            const tempSession = createSessionFromTask(task);
+            startSession(tempSession, task, taskSubject || null, quickTrackTimeMs);
             updateTask.mutate(
-              { id: task.id, payload: { status: "on_hold" } },
-              { onSuccess: () => toast({ title: "Task paused", description: "Time has been saved." }) }
+              { id: task.id, payload: { status: "in_progress" } },
+              { onSuccess: () => toast({ title: "Focus session started", description: "Entering focus mode..." }) }
             );
           }}
-          aria-label="Pause task"
-        >
-          <PauseCircle className="h-3 w-3 mr-1" />
-          Pause
-        </Button>
+        />
       )}
       {getSessionCount(task.id) > 0 && (
         <TooltipProvider>
@@ -1790,13 +1871,12 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size="sm"
-                className="h-7 text-xs"
+                size="icon"
+                className="h-7 w-7"
                 onClick={() => router.push("/schedule")}
                 aria-label="View in schedule"
               >
-                <ExternalLink className="h-3 w-3 mr-1" />
-                View in Schedule
+                <ExternalLink className="h-4 w-4 text-muted-foreground" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>
@@ -1805,62 +1885,81 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
           </Tooltip>
         </TooltipProvider>
       )}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => {
-          setEditId(task.id); 
-          setDraft(task);
-          // Initialize time state if deadline has time
-          if (task.deadline) {
-            // Backend sends UTC datetime, interpret as UTC then convert to local
-            let deadlineDate: Date;
-            if (task.deadline.includes('Z') || task.deadline.includes('+') || task.deadline.includes('-', 10)) {
-              deadlineDate = new Date(task.deadline);
-            } else {
-              // Naive UTC datetime - append 'Z' to interpret as UTC
-              deadlineDate = new Date(task.deadline + 'Z');
-            }
-            
-            // Check if time is significant (not end of day in UTC)
-            const hours = deadlineDate.getUTCHours();
-            const minutes = deadlineDate.getUTCMinutes();
-            const hasTime = !(hours === 23 && minutes === 59);
-            
-            if (hasTime) {
-              // Format time in local timezone for display
-              // deadlineDate is already a Date object representing UTC time
-              // toLocaleTimeString will convert it to local time automatically
-              const timeString = deadlineDate.toLocaleTimeString('en-US', { 
-                hour: '2-digit', 
-                minute: '2-digit', 
-                hour12: false
-              });
-              setEditDeadlineTime(prev => {
-                const next = new Map(prev);
-                next.set(task.id, { useTime: true, time: timeString });
-                return next;
-              });
-            }
-          }
-                      }}
-                      aria-label="Edit task"
-                    >
-                      <Pencil className="h-4 w-4 text-muted-foreground" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        deleteTask.mutate(task.id, {
-                          onSuccess: () => toast({ title: "Task removed" })
-                        })
-                      }
-                      aria-label="Delete task"
-                    >
-                      Remove
-                    </Button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => {
+                setEditId(task.id); 
+                setDraft(task);
+                // Initialize time state if deadline has time
+                if (task.deadline) {
+                  // Backend sends UTC datetime, interpret as UTC then convert to local
+                  let deadlineDate: Date;
+                  if (task.deadline.includes('Z') || task.deadline.includes('+') || task.deadline.includes('-', 10)) {
+                    deadlineDate = new Date(task.deadline);
+                  } else {
+                    // Naive UTC datetime - append 'Z' to interpret as UTC
+                    deadlineDate = new Date(task.deadline + 'Z');
+                  }
+                  
+                  // Check if time is significant (not end of day in UTC)
+                  const hours = deadlineDate.getUTCHours();
+                  const minutes = deadlineDate.getUTCMinutes();
+                  const hasTime = !(hours === 23 && minutes === 59);
+                  
+                  if (hasTime) {
+                    // Format time in local timezone for display
+                    // deadlineDate is already a Date object representing UTC time
+                    // toLocaleTimeString will convert it to local time automatically
+                    const timeString = deadlineDate.toLocaleTimeString('en-US', { 
+                      hour: '2-digit', 
+                      minute: '2-digit', 
+                      hour12: false
+                    });
+                    setEditDeadlineTime(prev => {
+                      const next = new Map(prev);
+                      next.set(task.id, { useTime: true, time: timeString });
+                      return next;
+                    });
+                  }
+                }
+              }}
+              aria-label="Edit task"
+            >
+              <Pencil className="h-4 w-4 text-muted-foreground" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Edit task</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() =>
+                deleteTask.mutate(task.id, {
+                  onSuccess: () => toast({ title: "Task removed" })
+                })
+              }
+              aria-label="Delete task"
+            >
+              <Trash2 className="h-4 w-4 text-muted-foreground" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Remove task</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
                   </div>
   );
 
@@ -1871,26 +1970,38 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     return (
       <div
         key={task.id}
-        className="flex items-center justify-between rounded-xl border-l-4 border-l-blue-400 border border-border/60 bg-white/80 px-4 py-3 shadow-sm hover:shadow-md transition-shadow"
+        className="flex items-start gap-3 rounded-xl border-l-4 border-l-blue-400 border border-border/60 bg-white/80 px-4 py-3 shadow-sm hover:shadow-md transition-shadow"
       >
-        <div className="flex items-start gap-3 w-full">
-          <Checkbox
-            checked={task.is_completed}
-            onCheckedChange={(checked) => handleTaskCompletion(task, checked as boolean)}
-          />
-          <div className="w-full">
-            <div className="flex items-center gap-2">
+        <Checkbox
+          checked={task.is_completed}
+          onCheckedChange={(checked) => handleTaskCompletion(task, checked as boolean)}
+          className="mt-0.5 shrink-0"
+        />
+        <div className="flex-1 min-w-0">
+          {isEditing ? (
+            <div className="space-y-2">
               {renderTaskTitle(task, isEditing)}
+              {renderEditingForm(task)}
             </div>
-            <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground items-center">
-              {isEditing ? renderEditingForm(task) : renderTaskDisplay(task, subject)}
-            </div>
-            {!isEditing && renderSubtasksSection(task)}
-          </div>
-        </div>
-        {!isEditing && renderTaskActions(task)}
+          ) : (
+            <>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  {renderTaskTitle(task, isEditing)}
+                  <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground items-center">
+                    {renderTaskDisplay(task, subject)}
+                  </div>
+                </div>
+                <div className="shrink-0">
+                  {renderTaskActions(task)}
+                </div>
               </div>
-            );
+              {renderSubtasksSection(task)}
+            </>
+          )}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -2197,7 +2308,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
                 const subject = task.subject_id ? subjectMap.get(task.subject_id) : undefined;
                 const timeSince = formatTimeSinceCompletion(task);
                 const totalTime = task.total_minutes_spent ?? ((task.actual_minutes_spent ?? 0) + (task.timer_minutes_spent ?? 0));
-                const timeDisplay = totalTime > 0 ? `${Math.round(totalTime / 60 * 10) / 10}h` : null;
+                const timeDisplay = totalTime > 0 ? formatTimer(totalTime) : null;
                 
                 return (
                   <div

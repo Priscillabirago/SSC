@@ -22,6 +22,7 @@ import type { Subject, Task, RecurrencePattern } from "@/lib/types";
 import { useCreateTask } from "@/features/tasks/hooks";
 import { toast } from "@/components/ui/use-toast";
 import { RecurrenceSelector } from "./recurrence-selector";
+import { localDateTimeToUTCISO } from "@/lib/utils";
 
 const priorities: Task["priority"][] = ["low", "medium", "high", "critical"];
 
@@ -49,25 +50,34 @@ export function NewTaskDialog({ subjects }: NewTaskDialogProps) {
     // Combine date and time if time is specified
     let deadline: string | undefined = undefined;
     if (form.deadline) {
-      // Parse date components
-      const [year, month, day] = form.deadline.split('-').map(Number);
-      
-      if (useSpecificTime && form.deadline_time) {
-        // Combine date and time in user's local timezone
-        const [hours, minutes] = form.deadline_time.split(':').map(Number);
-        const dateObj = new Date();
-        dateObj.setFullYear(year, month - 1, day);
-        dateObj.setHours(hours, minutes, 0, 0);
-        deadline = dateObj.toISOString();
-      } else {
-        // Date only - default to end of day (23:59) in user's local timezone
-        const dateObj = new Date();
-        dateObj.setFullYear(year, month - 1, day);
-        dateObj.setHours(23, 59, 0, 0);
-        deadline = dateObj.toISOString();
+      // Parse date string in local timezone to avoid UTC parsing issues
+      // form.deadline is in format "YYYY-MM-DD" from date input
+      const dateParts = form.deadline.split('-');
+      if (dateParts.length === 3) {
+        const [year, month, day] = dateParts.map(Number);
+        
+        if (useSpecificTime && form.deadline_time) {
+          // Combine date and time in local timezone, preserving the date component
+          const timeParts = form.deadline_time.split(':');
+          if (timeParts.length >= 2) {
+            const [hours, minutes] = timeParts.map(Number);
+            deadline = localDateTimeToUTCISO(year, month, day, hours, minutes);
+          }
+        } else {
+          // Date only - default to end of day (23:59) in local timezone, preserving the date component
+          deadline = localDateTimeToUTCISO(year, month, day, 23, 59);
+        }
       }
     }
-    const endDate = recurrenceEndDate ? new Date(recurrenceEndDate).toISOString() : undefined;
+    // Parse recurrence end date in local timezone (format: "YYYY-MM-DD")
+    const endDate = recurrenceEndDate ? (() => {
+      const dateParts = recurrenceEndDate.split('-');
+      if (dateParts.length === 3) {
+        const [year, month, day] = dateParts.map(Number);
+        return localDateTimeToUTCISO(year, month, day, 23, 59);
+      }
+      return undefined;
+    })() : undefined;
     
     // Prepare payload
     const payload: any = {
@@ -83,8 +93,6 @@ export function NewTaskDialog({ subjects }: NewTaskDialogProps) {
         payload.recurrence_end_date = endDate;
       }
     }
-    
-    console.log("Creating task with payload:", payload);
     
     createTask.mutate(
       payload,

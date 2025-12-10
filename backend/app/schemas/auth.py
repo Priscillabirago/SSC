@@ -45,3 +45,13 @@ class ChangeEmailRequest(BaseModel):
     new_email: EmailStr
     password: str  # Require password confirmation for security
 
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordWithTokenRequest(BaseModel):
+    """Reset password using a token from email (when user is not logged in)."""
+    token: str
+    new_password: str = Field(min_length=8)
+

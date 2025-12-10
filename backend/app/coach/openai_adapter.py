@@ -124,10 +124,6 @@ class OpenAICoachAdapter(CoachAdapter):
             temperature=0.4,
         )
         reply = completion.choices[0].message.content
-        lowered = message.lower()
-        print("DEBUG AI COACH OPENAI: Received user message =", message)
-        print("DEBUG AI COACH OPENAI: Lowered =", lowered)
-        print("DEBUG AI COACH OPENAI: FINAL REPLY =", reply)
         return {"reply": reply, "plan_adjusted": False}
 
     def suggest_plan(self, user: User, context: dict[str, Any]) -> Dict[str, Any]:
@@ -552,4 +548,142 @@ If the schedule is already well-optimized, provide a specific positive explanati
                 "explanation": "Schedule review completed. The current schedule is well-structured.",
                 "overall_impact": "positive"
             }
+    
+    def generate_daily_summary(
+        self, user: User, daily_context: dict[str, Any], context: dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate automatic end-of-day summary and feedback based on the day's activity."""
+        completed_sessions = daily_context.get("completed_sessions", [])
+        completed_tasks = daily_context.get("completed_tasks", [])
+        total_minutes = daily_context.get("total_minutes", 0)
+        energy_level = daily_context.get("energy_level", "medium")
+        tasks_tomorrow = daily_context.get("tasks_tomorrow", [])
+        
+        sessions_count = len(completed_sessions)
+        tasks_count = len(completed_tasks)
+        hours = total_minutes / 60
+        
+        prompt = f"""Generate a brief, encouraging end-of-day summary for a student. Be specific, warm, and actionable.
+
+Today's Activity:
+- Completed {sessions_count} study session(s) ({hours:.1f} hours total)
+- Finished {tasks_count} task(s)
+- Energy level: {energy_level}
+- Upcoming tomorrow: {len(tasks_tomorrow)} task(s) due
+
+Your role:
+1. Celebrate what was accomplished (be genuine, not overdone)
+2. Note any patterns (e.g., "You were most productive in the morning")
+3. Provide one specific tip for tomorrow based on today's performance
+4. Keep it concise (2-3 sentences for summary, 1 sentence for tomorrow's tip)
+
+Return JSON format:
+{{
+  "summary": "Brief narrative summary of the day (2-3 sentences)",
+  "tomorrow_tip": "One actionable tip for tomorrow based on today's patterns",
+  "tone": "positive|neutral|encouraging"
+}}"""
+
+        messages = self._build_messages(user, prompt, context)
+        
+        if not self.client:
+            return {
+                "summary": f"You completed {sessions_count} session(s) today totaling {hours:.1f} hours. {'Great work staying consistent!' if sessions_count > 0 else 'Consider scheduling some study time tomorrow.'}",
+                "tomorrow_tip": f"You have {len(tasks_tomorrow)} task(s) coming up - start with the most urgent one tomorrow morning when your energy is highest.",
+                "tone": "positive" if sessions_count > 0 else "encouraging"
+            }
+        
+        completion = self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.6,
+            response_format={"type": "json_object"}
+        )
+        reply = completion.choices[0].message.content
+        
+        try:
+            import json
+            parsed = json.loads(reply)
+            return {
+                "summary": parsed.get("summary", ""),
+                "tomorrow_tip": parsed.get("tomorrow_tip", ""),
+                "tone": parsed.get("tone", "positive")
+            }
+        except Exception:
+            return {
+                "summary": f"You completed {sessions_count} session(s) today totaling {hours:.1f} hours. Keep up the momentum!",
+                "tomorrow_tip": f"Focus on your {len(tasks_tomorrow)} upcoming task(s) tomorrow - start with the most important one.",
+                "tone": "positive"
+            }
+    
+    def get_session_encouragement(
+        self, user: User, session_context: dict[str, Any], context: dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate encouraging, motivational messages during a focus session."""
+        elapsed_minutes = session_context.get("elapsed_minutes", 0)
+        remaining_minutes = session_context.get("remaining_minutes", 0)
+        progress_percent = session_context.get("progress_percent", 0)
+        task_title = session_context.get("task_title", "your work")
+        is_paused = session_context.get("is_paused", False)
+        pomodoro_count = session_context.get("pomodoro_count", 0)
+        
+        milestone = None
+        if progress_percent >= 75:
+            milestone = "almost_done"
+        elif progress_percent >= 50:
+            milestone = "halfway"
+        elif progress_percent >= 25:
+            milestone = "quarter"
+        elif elapsed_minutes > 0:
+            milestone = "started"
+        
+        prompt = f"""Generate a brief, encouraging message for a student during a focus session. Be warm, specific, and motivating.
+
+Session Context:
+- Task: {task_title}
+- Elapsed: {elapsed_minutes} minutes
+- Remaining: {remaining_minutes} minutes
+- Progress: {progress_percent}%
+- Status: {"Paused" if is_paused else "Active"}
+- Pomodoro: {pomodoro_count}/4 (if applicable)
+
+Milestone: {milestone}
+
+Return JSON format:
+{{
+  "message": "Brief encouraging message (1-2 sentences)",
+  "tone": "motivational|celebratory|supportive"
+}}"""
+
+        messages = self._build_messages(user, prompt, context)
+
+        if not self.client:
+            if milestone == "almost_done":
+                return {"message": f"You're almost there! Just {remaining_minutes} minutes left. You've got this!", "tone": "motivational"}
+            elif milestone == "halfway":
+                return {"message": "You're halfway through! Keep that momentum going.", "tone": "supportive"}
+            elif milestone == "quarter":
+                return {"message": "Great start! You're making solid progress.", "tone": "motivational"}
+            else:
+                return {"message": "Stay focused! Every minute counts toward your goal.", "tone": "supportive"}
+
+        try:
+            completion = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0.7,
+                response_format={"type": "json_object"}
+            )
+            reply = completion.choices[0].message.content
+            if reply:
+                import json
+                reply_dict = json.loads(reply)
+                return {
+                    "message": reply_dict.get("message", "Keep going! You're doing great."),
+                    "tone": reply_dict.get("tone", "motivational")
+                }
+        except Exception:
+            pass
+
+        return {"message": "Stay focused! You're making progress.", "tone": "supportive"}
 

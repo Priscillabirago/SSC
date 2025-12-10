@@ -72,6 +72,7 @@ class TaskInDBBase(TaskBase):
     id: int
     user_id: int
     is_completed: bool
+    completed_at: datetime | None = None  # Timestamp when task was marked complete
     recurring_template_id: int | None = None
     next_occurrence_date: datetime | None = None
     created_at: datetime

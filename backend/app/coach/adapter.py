@@ -46,6 +46,18 @@ class CoachAdapter(ABC):
         self, user: User, schedule_context: dict[str, Any], context: dict[str, Any]
     ) -> dict[str, Any]:
         """Review and optimize a generated schedule for better real-world efficiency."""
+    
+    @abstractmethod
+    def generate_daily_summary(
+        self, user: User, daily_context: dict[str, Any], context: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Generate automatic end-of-day summary and feedback based on the day's activity."""
+    
+    @abstractmethod
+    def get_session_encouragement(
+        self, user: User, session_context: dict[str, Any], context: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Generate encouraging, motivational messages during a focus session."""
 
 
 class MemoryStore(Protocol):

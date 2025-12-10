@@ -83,14 +83,14 @@ export function ScheduleView() {
       {/* Workload Warnings - shown before and after schedule generation */}
       <WorkloadWarningsCard postGenAnalysis={postGenAnalysis} />
       
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold text-foreground">Scheduling</h1>
+      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-2">
+            <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Scheduling</h1>
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                  <Info className="h-4 w-4 text-muted-foreground cursor-help flex-shrink-0" />
                 </TooltipTrigger>
                 <TooltipContent className="max-w-xs">
                   <p className="font-semibold mb-1">What's the difference?</p>
@@ -104,14 +104,11 @@ export function ScheduleView() {
               </Tooltip>
             </TooltipProvider>
           </div>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground leading-relaxed">
             Your auto-generated study plan. Sessions are created from your tasks on the Subjects & Tasks page.
           </p>
-          <p className="text-xs text-muted-foreground/80 mt-1">
-            💡 <strong>Tip:</strong> Make sure you've created tasks first (on Subjects & Tasks page), then click "Generate Schedule" to create your plan.
-          </p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 flex-shrink-0">
           <div className="flex items-center gap-2">
             <Checkbox
               id="ai-optimization"
@@ -121,7 +118,8 @@ export function ScheduleView() {
             />
             <Label htmlFor="ai-optimization" className="text-sm font-normal cursor-pointer flex items-center gap-1.5">
               <Sparkles className="h-3.5 w-3.5 text-purple-500" />
-              AI optimization
+              <span className="hidden sm:inline">AI optimization</span>
+              <span className="sm:hidden">AI opt.</span>
             </Label>
             <TooltipProvider>
               <Tooltip>
@@ -149,9 +147,10 @@ export function ScheduleView() {
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button onClick={handleGenerate} disabled={generate.isPending} className="gap-2">
+                <Button onClick={handleGenerate} disabled={generate.isPending} className="gap-2 w-full sm:w-auto">
                   {generate.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                  Regenerate week
+                  <span className="hidden sm:inline">Regenerate week</span>
+                  <span className="sm:hidden">Regenerate</span>
                 </Button>
               </TooltipTrigger>
               <TooltipContent className="max-w-xs">
@@ -207,7 +206,7 @@ export function ScheduleView() {
       {isLoading || !sessions ? (
         <Skeleton className="h-96 w-full" />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[1.3fr_0.7fr]">
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-[1.3fr_0.7fr]">
           <WeeklyTimeline sessions={sessions} />
           <div className="space-y-6">
             <QuickAddTaskWidget />

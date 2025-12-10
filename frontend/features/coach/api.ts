@@ -47,3 +47,34 @@ export async function deleteAllCoachChatHistory() {
   await api.delete(`/coach/chat/history`);
 }
 
+export interface DailySummary {
+  summary: string;
+  tomorrow_tip: string;
+  tone: "positive" | "neutral" | "encouraging";
+  last_session_end: string | null;
+  first_session_start: string | null;
+  user_timezone: string;
+}
+
+export async function getDailySummary(): Promise<DailySummary> {
+  const { data } = await api.get<DailySummary>("/coach/daily-summary");
+  return data;
+}
+
+export interface SessionEncouragement {
+  message: string;
+  tone: "motivational" | "celebratory" | "supportive";
+}
+
+export async function getSessionEncouragement(payload: {
+  elapsed_minutes: number;
+  remaining_minutes: number;
+  progress_percent: number;
+  task_title?: string | null;
+  is_paused?: boolean;
+  pomodoro_count?: number;
+}): Promise<SessionEncouragement> {
+  const { data } = await api.post<SessionEncouragement>("/coach/session-encouragement", payload);
+  return data;
+}
+

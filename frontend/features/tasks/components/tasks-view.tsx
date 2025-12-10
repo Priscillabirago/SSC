@@ -33,14 +33,14 @@ export function TasksView() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex-1">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold text-foreground">Subjects & Tasks</h1>
+            <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Subjects & Tasks</h1>
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                  <Info className="h-4 w-4 text-muted-foreground cursor-help flex-shrink-0" />
                 </TooltipTrigger>
                 <TooltipContent className="max-w-xs">
                   <p className="font-semibold mb-1">What's the difference?</p>
@@ -61,7 +61,7 @@ export function TasksView() {
             💡 <strong>Tip:</strong> Start by adding subjects, then create tasks for each subject with deadlines and priorities.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap sm:flex-nowrap">
           {hasActiveTasks && (
             <TooltipProvider>
               <Tooltip>
@@ -69,10 +69,11 @@ export function TasksView() {
                   <Button
                     variant="outline"
                     onClick={() => router.push("/schedule")}
-                    className="gap-2"
+                    className="gap-2 flex-1 sm:flex-initial"
                   >
                     <Calendar className="h-4 w-4" />
-                    Generate Schedule
+                    <span className="hidden sm:inline">Generate Schedule</span>
+                    <span className="sm:hidden">Schedule</span>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -85,7 +86,7 @@ export function TasksView() {
           <NewSubjectDialog />
         </div>
       </div>
-      <div className="grid gap-6 lg:grid-cols-[1fr_1.1fr]">
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-[1fr_1.1fr]">
         <Card className="h-full">
           <CardHeader className="flex items-center justify-between">
             <CardTitle>Subjects</CardTitle>

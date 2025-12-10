@@ -74,3 +74,26 @@ class SessionPreparationResponse(BaseModel):
     strategy: str = Field(..., description="Recommended study strategy (e.g., 'Active Recall', 'Spaced Repetition')")
     rationale: str = Field(..., description="Brief explanation of why this approach is effective")
 
+
+class DailySummaryResponse(BaseModel):
+    summary: str
+    tomorrow_tip: str
+    tone: Literal["positive", "neutral", "encouraging"]
+    last_session_end: str | None = None  # ISO datetime when last session ended
+    first_session_start: str | None = None  # ISO datetime when first session starts today
+    user_timezone: str = "UTC"  # User's timezone for frontend comparisons
+
+
+class SessionEncouragementRequest(BaseModel):
+    elapsed_minutes: int
+    remaining_minutes: int
+    progress_percent: float
+    task_title: str | None = None
+    is_paused: bool = False
+    pomodoro_count: int = 0
+
+
+class SessionEncouragementResponse(BaseModel):
+    message: str
+    tone: Literal["motivational", "celebratory", "supportive"]
+

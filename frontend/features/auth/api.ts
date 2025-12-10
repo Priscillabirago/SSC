@@ -8,7 +8,10 @@ interface AuthResponse {
 }
 
 export async function login(email: string, password: string): Promise<AuthTokens> {
-  const { data } = await api.post<AuthResponse>("/auth/login", { email, password });
+  const { data } = await api.post<AuthResponse>("/auth/login", { 
+    email, 
+    password
+  });
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token
@@ -52,6 +55,21 @@ export async function changeEmail(newEmail: string, password: string): Promise<U
   const { data } = await api.post<UserProfile>("/auth/change-email", {
     new_email: newEmail,
     password: password,
+  });
+  return data;
+}
+
+export async function forgotPassword(email: string): Promise<{ message: string }> {
+  const { data } = await api.post<{ message: string }>("/auth/forgot-password", {
+    email,
+  });
+  return data;
+}
+
+export async function resetPasswordWithToken(token: string, newPassword: string): Promise<{ message: string }> {
+  const { data } = await api.post<{ message: string }>("/auth/reset-password-with-token", {
+    token,
+    new_password: newPassword,
   });
   return data;
 }
