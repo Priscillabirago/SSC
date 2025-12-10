@@ -29,7 +29,7 @@ uvicorn app.main:app --reload
 ```
 
 - The backend will use a local SQLite file (`../smart_study_companion.db`) for storage.
-- No Docker, no Alembic, no Poetry necessary!
+
 
 ## Frontend Setup
 _(unchanged; refer to prior instructions for Next.js)_
