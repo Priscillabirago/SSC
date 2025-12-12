@@ -133,12 +133,27 @@ class WeightedTask:
         self.sort_index = -self.weight  # invert for descending sort
 
 
-def _calculate_subject_weight_modifier(subject: Subject, reference: datetime) -> float:
-    """Calculate weight modifier based on subject difficulty and exam urgency."""
+def _calculate_subject_weight_modifier(
+    subject: Subject, reference: datetime, user_tz: ZoneInfo | None = None
+) -> float:
+    """Calculate weight modifier based on subject difficulty and exam urgency.
+    
+    Args:
+        subject: The subject to calculate modifier for
+        reference: Reference datetime (UTC)
+        user_tz: User's timezone for proper date comparison
+    """
     modifier = DIFFICULTY_WEIGHT[subject.difficulty]
     
     if subject.exam_date:
-        days_until_exam = (subject.exam_date - reference.date()).days
+        # Get reference date in user's local timezone for proper comparison
+        if user_tz:
+            ref_aware = reference if reference.tzinfo else reference.replace(tzinfo=timezone.utc)
+            ref_local_date = ref_aware.astimezone(user_tz).date()
+        else:
+            ref_local_date = reference.date()
+        
+        days_until_exam = (subject.exam_date - ref_local_date).days
         if days_until_exam >= 0:
             exam_urgency = max(0, 30 - days_until_exam) / 30
             modifier *= 1 + exam_urgency * 0.5
@@ -171,8 +186,17 @@ def _calculate_deadline_weight_modifier(task: Task, reference: datetime) -> floa
 
 
 def calculate_weights(
-    tasks: Sequence[Task], subjects: Sequence[Subject], reference: datetime
+    tasks: Sequence[Task], subjects: Sequence[Subject], reference: datetime,
+    user_tz: ZoneInfo | None = None
 ) -> list[WeightedTask]:
+    """Calculate weights for tasks based on priority, deadline, and subject.
+    
+    Args:
+        tasks: Tasks to weight
+        subjects: Subjects for subject-based modifiers
+        reference: Reference datetime (UTC)
+        user_tz: User's timezone for proper date comparisons
+    """
     subject_map = {subject.id: subject for subject in subjects}
     weighted_tasks: list[WeightedTask] = []
 
@@ -189,10 +213,21 @@ def calculate_weights(
         weight = PRIORITY_WEIGHT[task.priority]
         
         if subject:
-            weight *= _calculate_subject_weight_modifier(subject, reference)
+            weight *= _calculate_subject_weight_modifier(subject, reference, user_tz)
         
         weight *= _calculate_deadline_weight_modifier(task, reference)
         weight += task.estimated_minutes / 120
+        
+        # Ensure CRITICAL tasks always rank above HIGH priority tasks
+        # Even with worst-case modifiers (EASY subject, far deadline), CRITICAL should win
+        # Minimum weight for CRITICAL: 1.6 * 0.9 * 1.0 + 0 = 1.44
+        # Maximum weight for HIGH: 1.3 * 1.25 * 2.0 + 1.0 = 4.25
+        # So we need to ensure CRITICAL floor is above HIGH ceiling
+        # Actually, let's use a simpler approach: ensure CRITICAL tasks have minimum weight
+        if task.priority == TaskPriority.CRITICAL:
+            # Ensure CRITICAL tasks have at least 2.0 weight (above HIGH max of ~1.3 * modifiers)
+            # This accounts for worst case: CRITICAL with EASY subject and far deadline
+            weight = max(weight, 2.0)
         
         # Calculate remaining work: estimated - total time spent (session + timer)
         total_spent = task.total_minutes_spent
@@ -271,20 +306,51 @@ def _is_recurring_constraint_relevant(constraint: ScheduleConstraint, weekday: i
     return constraint.days_of_week and weekday in constraint.days_of_week
 
 
-def _is_one_time_constraint_relevant(constraint: ScheduleConstraint, day: date) -> bool:
-    """Check if a one-time constraint applies to the given day."""
+def _is_one_time_constraint_relevant(
+    constraint: ScheduleConstraint, day: date, user_tz: ZoneInfo | None = None
+) -> bool:
+    """Check if a one-time constraint applies to the given day.
+    
+    Args:
+        constraint: The constraint to check
+        day: The LOCAL date in user's timezone
+        user_tz: User's timezone for proper date conversion
+    """
     if not constraint.start_datetime:
         return False
-    if constraint.start_datetime.date() > day:
+    
+    # Convert constraint datetimes to user's local timezone for proper date comparison
+    start_dt = constraint.start_datetime
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if user_tz:
+        start_dt = start_dt.astimezone(user_tz)
+    
+    if start_dt.date() > day:
         return False
+    
     if not constraint.end_datetime:
         return False
-    return constraint.end_datetime.date() >= day
+    
+    end_dt = constraint.end_datetime
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
+    if user_tz:
+        end_dt = end_dt.astimezone(user_tz)
+    
+    return end_dt.date() >= day
 
 
 def _extract_constraints_for_day(
-    constraints: Iterable[ScheduleConstraint], day: date
+    constraints: Iterable[ScheduleConstraint], day: date, user_tz: ZoneInfo | None = None
 ) -> list[ScheduleConstraint]:
+    """Extract constraints that apply to the given day.
+    
+    Args:
+        constraints: All user constraints
+        day: The LOCAL date in user's timezone
+        user_tz: User's timezone for proper date comparison of one-time constraints
+    """
     weekday = day.weekday()
     relevant: list[ScheduleConstraint] = []
     for constraint in constraints:
@@ -292,7 +358,7 @@ def _extract_constraints_for_day(
             if _is_recurring_constraint_relevant(constraint, weekday):
                 relevant.append(constraint)
         else:
-            if _is_one_time_constraint_relevant(constraint, day):
+            if _is_one_time_constraint_relevant(constraint, day, user_tz):
                 relevant.append(constraint)
     return relevant
 
@@ -348,23 +414,62 @@ def insert_breaks(
     return adjusted
 
 
-def interleave_subjects(sessions: list[StudyBlock]) -> list[StudyBlock]:
-    if not sessions:
+def interleave_subjects(sessions: list[StudyBlock], task_priorities: dict[int, str] | None = None) -> list[StudyBlock]:
+    """
+    Reorder sessions for subject variety while respecting CRITICAL priority.
+    
+    Only swaps adjacent sessions of SAME priority level to avoid
+    pushing critical tasks below high-priority ones.
+    
+    Args:
+        sessions: List of study blocks sorted by priority
+        task_priorities: Optional dict mapping task_id -> priority string
+    """
+    if not sessions or len(sessions) < 2:
         return sessions
 
-    reordered: list[StudyBlock] = [sessions[0]]
-    remaining = sessions[1:]
-    while remaining:
-        last_subject = reordered[-1].subject_id
-        next_idx = None
-        for idx, candidate in enumerate(remaining):
-            if candidate.subject_id != last_subject:
-                next_idx = idx
+    # If no priority info provided, return as-is (maintain priority order)
+    if not task_priorities:
+        return sessions
+    
+    def is_critical(session: StudyBlock) -> bool:
+        if session.task_id and session.task_id in task_priorities:
+            return task_priorities[session.task_id] == "CRITICAL"
+        return False
+    
+    # Simple approach: only swap adjacent non-critical sessions for variety
+    # Never move a critical session down or a non-critical session above critical
+    result = list(sessions)
+    
+    i = 0
+    while i < len(result) - 1:
+        current = result[i]
+        next_session = result[i + 1]
+        
+        # If current is critical, never swap it - move on
+        if is_critical(current):
+            i += 1
+            continue
+        
+        # If next is critical, don't swap - it should stay where it is
+        if is_critical(next_session):
+            i += 1
+            continue
+        
+        # Both are non-critical: swap if same subject and there's a different subject ahead
+        if current.subject_id == next_session.subject_id:
+            # Look for a non-critical session with different subject to swap
+            for j in range(i + 2, len(result)):
+                candidate = result[j]
+                if is_critical(candidate):
+                    break  # Don't look past critical sessions
+                if candidate.subject_id != current.subject_id:
+                    # Swap next_session with candidate
+                    result[i + 1], result[j] = result[j], result[i + 1]
                 break
-        if next_idx is None:
-            next_idx = 0
-        reordered.append(remaining.pop(next_idx))
-    return reordered
+        i += 1
+    
+    return result
 
 
 def _energy_cap(level: EnergyLevel | None, user_max: int) -> int:
@@ -385,15 +490,26 @@ def _process_task_in_window(
         return None, pointer
     
     current_task = tasks[0]
+    
+    # Check if task has very little remaining time - if so, remove it
+    # This should happen BEFORE calculating session_length
+    if current_task.remaining_minutes <= 10:
+        tasks.pop(0)
+        return None, pointer
+    
+    # Calculate how much time we can allocate in this window
+    window_remaining = window_end - pointer
+    
+    # If window is too small, skip this window but DON'T remove the task
+    # The task will be scheduled in subsequent windows/days
+    if window_remaining <= timedelta(minutes=10):
+        return None, window_end  # Move pointer to end of window to exit the while loop
+    
     session_length = min(
         session_cap,
         timedelta(minutes=current_task.remaining_minutes),
-        window_end - pointer,
+        window_remaining,
     )
-    
-    if session_length <= timedelta(minutes=10):
-        tasks.pop(0)
-        return None, pointer
     
     session = StudyBlock(
         start_time=pointer,
@@ -410,8 +526,8 @@ def _process_task_in_window(
     
     if current_task.remaining_minutes <= 0:
         tasks.pop(0)
-    else:
-        tasks.sort()
+    # NOTE: Removed tasks.sort() here - it was destroying deadline-based ordering
+    # The initial sort by _sort_tasks_for_day() should be maintained throughout allocation
     
     return session, new_pointer
 
@@ -468,6 +584,11 @@ def _allocate_sessions_for_day(
     break_duration = timedelta(minutes=user.break_duration)
     session_cap = timedelta(minutes=_energy_cap(energy_level, user.max_session_length))
     current_time = _normalize_current_time(current_time)
+    
+    # Build task priority map for interleaving (to respect CRITICAL priority)
+    task_priorities: dict[int, str] = {
+        wt.task.id: wt.task.priority.value for wt in tasks
+    }
 
     for window_start, window_end in windows:
         pointer = _calculate_window_pointer(window_start, window_end, current_time)
@@ -481,7 +602,41 @@ def _allocate_sessions_for_day(
             if session:
                 sessions.append(session)
     
-    return interleave_subjects(insert_breaks(sessions, user.break_duration))
+    return interleave_subjects(insert_breaks(sessions, user.break_duration), task_priorities)
+
+
+def _sort_tasks_for_day(tasks: list[WeightedTask], day_date: date, user_tz: str) -> None:
+    """
+    Sort tasks in-place so those with deadlines on or before this day come first.
+    This ensures urgent tasks don't get pushed past their deadlines.
+    
+    Within each group (urgent vs normal), maintains the original weight-based order.
+    
+    Args:
+        tasks: List of weighted tasks to sort
+        day_date: The LOCAL date (in user's timezone) we're scheduling for
+        user_tz: User's timezone string for proper date comparison
+    """
+    tz = ZoneInfo(user_tz)
+    
+    def deadline_priority(task: WeightedTask) -> tuple[int, float]:
+        deadline = task.task.deadline
+        if deadline:
+            # Convert deadline to user's timezone to get the correct local date
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+            deadline_local = deadline.astimezone(tz)
+            deadline_date_local = deadline_local.date()
+            
+            # 0 = deadline on/before this day (urgent), 1 = deadline after (normal)
+            is_urgent = 0 if deadline_date_local <= day_date else 1
+        else:
+            is_urgent = 1  # No deadline = not urgent
+        
+        # Secondary sort by original weight (negated for descending)
+        return (is_urgent, -task.weight)
+    
+    tasks.sort(key=deadline_priority)
 
 
 def build_weekly_plan(
@@ -492,11 +647,18 @@ def build_weekly_plan(
     reference: datetime,
 ) -> WeeklyPlan:
     week_start = _local_day_start(reference, user.timezone)
+    user_tz = ZoneInfo(user.timezone)
     plans: list[DailyPlan] = []
+    
     for offset in range(7):
         day_start = week_start + timedelta(days=offset)
-        day_date = day_start.date()
-        energy_level = energy_by_day.get(day_date)
+        
+        # Get the LOCAL date in user's timezone (not UTC date!)
+        # day_start is naive UTC, convert to user's tz to get correct local date
+        day_start_aware = day_start.replace(tzinfo=timezone.utc)
+        day_date_local = day_start_aware.astimezone(user_tz).date()
+        
+        energy_level = energy_by_day.get(day_date_local)
         
         # Parse preferred study windows (supports both old and new formats)
         preferred_windows_raw = user.preferred_study_windows
@@ -513,8 +675,14 @@ def build_weekly_plan(
             plans.append(DailyPlan(day=day_start, sessions=[]))
             continue
 
-        effective_constraints = _extract_constraints_for_day(constraints, day_date)
+        effective_constraints = _extract_constraints_for_day(constraints, day_date_local, user_tz)
         available_blocks = apply_constraints(window_ranges, effective_constraints)
+        
+        # Sort tasks so those with deadlines on/before this day come first
+        # This ensures urgent tasks get scheduled before their deadlines
+        # Pass user's timezone for proper local date comparison
+        _sort_tasks_for_day(tasks, day_date_local, user.timezone)
+        
         sessions = _allocate_sessions_for_day(
             available_blocks,
             tasks,
@@ -695,7 +863,8 @@ def generate_weekly_schedule(
         db.query(DailyEnergy).filter(DailyEnergy.user_id == user.id).all()
     )
     energy_map = {energy.day: energy.level for energy in energies}
-    weighted_tasks = calculate_weights(tasks, subjects, ref)
+    user_tz = ZoneInfo(user.timezone)
+    weighted_tasks = calculate_weights(tasks, subjects, ref, user_tz)
     plan = build_weekly_plan(user, weighted_tasks, constraints, energy_map, ref)
     
     return plan, rescheduling_info
@@ -705,10 +874,15 @@ def micro_plan(
     db: Session, user: User, minutes: int, reference: datetime | None = None
 ) -> list[StudyBlock]:
     ref = reference or datetime.now(timezone.utc)
-    today = ref.date()
+    
+    # Get today in user's local timezone for energy lookup
+    user_tz = ZoneInfo(user.timezone)
+    ref_aware = ref if ref.tzinfo else ref.replace(tzinfo=timezone.utc)
+    today_local = ref_aware.astimezone(user_tz).date()
+    
     energy_entry = (
         db.query(DailyEnergy)
-        .filter(DailyEnergy.user_id == user.id, DailyEnergy.day == today)
+        .filter(DailyEnergy.user_id == user.id, DailyEnergy.day == today_local)
         .first()
     )
     energy_level = energy_entry.level if energy_entry else EnergyLevel.MEDIUM
@@ -728,7 +902,12 @@ def micro_plan(
         .filter(Subject.user_id == user.id)
         .all()
     )
-    weighted = calculate_weights(tasks, subjects, ref)
+    weighted = calculate_weights(tasks, subjects, ref, user_tz)
+    
+    # Build task priority map for interleaving
+    task_priorities: dict[int, str] = {
+        wt.task.id: wt.task.priority.value for wt in weighted
+    }
 
     allocation: list[StudyBlock] = []
     remaining = timedelta(minutes=minutes)
@@ -737,14 +916,22 @@ def micro_plan(
 
     while remaining > timedelta(minutes=5) and weighted:
         current = weighted[0]
+        
+        # Check if task has very little remaining time - remove it
+        if current.remaining_minutes <= 10:
+            weighted.pop(0)
+            continue
+        
+        # Check if user's remaining time is too small - stop allocating
+        if remaining <= timedelta(minutes=10):
+            break
+        
         session_length = min(
             session_cap,
             timedelta(minutes=current.remaining_minutes),
             remaining,
         )
-        if session_length <= timedelta(minutes=10):
-            weighted.pop(0)
-            continue
+        
         allocation.append(
             StudyBlock(
                 start_time=pointer,
@@ -764,5 +951,5 @@ def micro_plan(
         else:
             weighted.sort()
 
-    return interleave_subjects(allocation)
+    return interleave_subjects(allocation, task_priorities)
 

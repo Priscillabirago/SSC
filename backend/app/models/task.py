@@ -56,6 +56,7 @@ class Task(Base):
     subtasks = Column(JSON, nullable=True, default=None)
     is_completed = Column(Boolean, nullable=False, default=False)
     completed_at = Column(DateTime, nullable=True, default=None)  # Timestamp when task was marked complete
+    prevent_auto_completion = Column(Boolean, nullable=False, default=False)  # If True, don't auto-complete even if time >= estimate
     
     # Recurring task fields
     is_recurring_template = Column(Boolean, nullable=False, default=False)

@@ -12,16 +12,19 @@ interface FocusSessionState {
   startTime: number | null; // timestamp when session actually started
   pausedTime: number | null; // timestamp when paused
   sessionDurationMs: number; // total session duration in milliseconds (end_time - start_time)
-  remainingSeconds: number; // calculated remaining time
+  remainingSeconds: number; // calculated remaining time for main session
   quickTrackTimeMs: number; // time from Quick Track before conversion (to preserve continuity)
   pomodoroEnabled: boolean;
   pomodoroMode: "work" | "break" | null;
   pomodoroCount: number; // current pomodoro number (1-4)
+  pomodoroStartTime: number | null; // timestamp when current pomodoro cycle started
+  pomodoroDurationMs: number; // duration of current pomodoro cycle (25 min work or 5 min break)
+  pomodoroRemainingSeconds: number; // remaining time for current pomodoro cycle
 }
 
 interface FocusSessionContextType {
   state: FocusSessionState;
-  startSession: (session: StudySession, task: Task | null, subject: Subject | null, quickTrackTimeMs?: number) => void;
+  startSession: (session: StudySession, task: Task | null, subject: Subject | null, quickTrackTimeMs?: number, quickTrackStartTime?: number | null) => void;
   pauseSession: () => void;
   resumeSession: () => void;
   stopSession: () => void;
@@ -49,6 +52,9 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
     pomodoroEnabled: false,
     pomodoroMode: null,
     pomodoroCount: 0,
+    pomodoroStartTime: null,
+    pomodoroDurationMs: 0,
+    pomodoroRemainingSeconds: 0,
   });
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -71,12 +77,20 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
     if (state.isActive && !state.isPaused && state.startTime && state.sessionDurationMs > 0) {
       intervalRef.current = setInterval(() => {
         setState((prev) => {
+          // Update main session timer
           const remaining = calculateRemainingSeconds(prev.sessionDurationMs, prev.startTime, prev.pausedTime);
-          if (remaining <= 0) {
-            // Timer ended
-            return { ...prev, isActive: false, remainingSeconds: 0 };
+          
+          // Update Pomodoro timer if enabled
+          let pomodoroRemaining = prev.pomodoroRemainingSeconds;
+          if (prev.pomodoroEnabled && prev.pomodoroStartTime && prev.pomodoroDurationMs > 0) {
+            pomodoroRemaining = calculateRemainingSeconds(prev.pomodoroDurationMs, prev.pomodoroStartTime, prev.pausedTime);
           }
-          return { ...prev, remainingSeconds: remaining };
+          
+          if (remaining <= 0) {
+            // Main timer ended
+            return { ...prev, isActive: false, remainingSeconds: 0, pomodoroRemainingSeconds: pomodoroRemaining };
+          }
+          return { ...prev, remainingSeconds: remaining, pomodoroRemainingSeconds: pomodoroRemaining };
         });
       }, 1000);
     } else if (intervalRef.current) {
@@ -89,19 +103,26 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
         clearInterval(intervalRef.current);
       }
     };
-  }, [state.isActive, state.isPaused, state.startTime, state.sessionDurationMs, calculateRemainingSeconds]);
+  }, [state.isActive, state.isPaused, state.startTime, state.sessionDurationMs, state.pomodoroEnabled, state.pomodoroStartTime, state.pomodoroDurationMs, calculateRemainingSeconds]);
 
-  const startSession = useCallback((session: StudySession, task: Task | null, subject: Subject | null, quickTrackTimeMs: number = 0) => {
+  const startSession = useCallback((session: StudySession, task: Task | null, subject: Subject | null, quickTrackTimeMs: number = 0, quickTrackStartTime: number | null = null) => {
     const startTime = Date.now();
     // Calculate session duration from start_time to end_time
     const sessionStart = new Date(session.start_time).getTime();
     const sessionEnd = new Date(session.end_time).getTime();
     let sessionDurationMs = sessionEnd - sessionStart;
     
-    // If Quick Track time exists, adjust the session to account for it
-    // Reduce remaining time by the Quick Track time already spent
-    if (quickTrackTimeMs > 0) {
-      sessionDurationMs = Math.max(0, sessionDurationMs - quickTrackTimeMs);
+    // Only reduce session duration if Quick Track was started within the session's time window
+    // This prevents Quick Track time from Tasks page (started hours ago or for different sessions)
+    // from incorrectly reducing the current session's duration
+    if (quickTrackTimeMs > 0 && quickTrackStartTime !== null) {
+      // Only reduce if Quick Track started at or after the session's scheduled start time
+      // This means the Quick Track time overlaps with the session's time window
+      if (quickTrackStartTime >= sessionStart) {
+        sessionDurationMs = Math.max(0, sessionDurationMs - quickTrackTimeMs);
+      }
+      // If Quick Track started before session start, don't reduce duration
+      // (Quick Track time is already saved to timer_minutes_spent separately)
     }
     
     const remainingSeconds = calculateRemainingSeconds(sessionDurationMs, startTime, null);
@@ -120,6 +141,9 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
       pomodoroEnabled: false,
       pomodoroMode: null,
       pomodoroCount: 0,
+      pomodoroStartTime: null,
+      pomodoroDurationMs: 0,
+      pomodoroRemainingSeconds: 0,
     });
   }, [calculateRemainingSeconds]);
 
@@ -145,12 +169,18 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
       const pauseDuration = Date.now() - prev.pausedTime;
       // Adjust start time to account for the pause
       const newStartTime = prev.startTime + pauseDuration;
+      
+      // Also adjust Pomodoro start time if Pomodoro is enabled
+      const newPomodoroStartTime = prev.pomodoroEnabled && prev.pomodoroStartTime
+        ? prev.pomodoroStartTime + pauseDuration
+        : prev.pomodoroStartTime;
 
       return {
         ...prev,
         isPaused: false,
         startTime: newStartTime,
         pausedTime: null,
+        pomodoroStartTime: newPomodoroStartTime,
       };
     });
   }, []);
@@ -170,6 +200,9 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
       pomodoroEnabled: false,
       pomodoroMode: null,
       pomodoroCount: 0,
+      pomodoroStartTime: null,
+      pomodoroDurationMs: 0,
+      pomodoroRemainingSeconds: 0,
     });
   }, []);
 
@@ -179,12 +212,16 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
       
       const newEnabled = !prev.pomodoroEnabled;
       if (newEnabled && !prev.pomodoroMode) {
-        // Starting Pomodoro - enter work mode
+        // Starting Pomodoro - enter work mode (25 minutes)
+        const workDurationMs = 25 * 60 * 1000;
         return {
           ...prev,
           pomodoroEnabled: true,
           pomodoroMode: "work",
           pomodoroCount: 1,
+          pomodoroStartTime: Date.now(),
+          pomodoroDurationMs: workDurationMs,
+          pomodoroRemainingSeconds: 25 * 60,
         };
       } else if (!newEnabled) {
         // Disabling Pomodoro
@@ -192,6 +229,9 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
           ...prev,
           pomodoroEnabled: false,
           pomodoroMode: null,
+          pomodoroStartTime: null,
+          pomodoroDurationMs: 0,
+          pomodoroRemainingSeconds: 0,
         };
       }
       return prev;
@@ -248,32 +288,28 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
 
   // Handle Pomodoro mode switching
   useEffect(() => {
-    if (state.pomodoroEnabled && state.isActive && !state.isPaused && state.remainingSeconds === 0 && state.session) {
+    if (state.pomodoroEnabled && state.isActive && !state.isPaused && state.pomodoroRemainingSeconds <= 0 && state.pomodoroStartTime) {
       if (state.pomodoroMode === "work") {
         // Work session ended - switch to break (5 minutes)
+        const breakDurationMs = 5 * 60 * 1000;
         setState((prev) => ({
           ...prev,
           pomodoroMode: "break",
-          sessionDurationMs: 5 * 60 * 1000, // 5 minute break
-          remainingSeconds: 5 * 60,
-          startTime: Date.now(),
-          pausedTime: null,
+          pomodoroStartTime: Date.now(),
+          pomodoroDurationMs: breakDurationMs,
+          pomodoroRemainingSeconds: 5 * 60,
         }));
       } else if (state.pomodoroMode === "break") {
         // Break ended - switch to next work session or complete
         if (state.pomodoroCount < 4) {
-          const sessionStart = new Date(state.session.start_time).getTime();
-          const sessionEnd = new Date(state.session.end_time).getTime();
-          const workDurationMs = sessionEnd - sessionStart;
-          
+          const workDurationMs = 25 * 60 * 1000;
           setState((prev) => ({
             ...prev,
             pomodoroMode: "work",
             pomodoroCount: prev.pomodoroCount + 1,
-            sessionDurationMs: workDurationMs,
-            remainingSeconds: Math.floor(workDurationMs / 1000),
-            startTime: Date.now(),
-            pausedTime: null,
+            pomodoroStartTime: Date.now(),
+            pomodoroDurationMs: workDurationMs,
+            pomodoroRemainingSeconds: 25 * 60,
           }));
         } else {
           // All 4 pomodoros done
@@ -281,7 +317,7 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
         }
       }
     }
-  }, [state.pomodoroEnabled, state.isActive, state.isPaused, state.remainingSeconds, state.pomodoroMode, state.pomodoroCount, state.session, stopSession]);
+  }, [state.pomodoroEnabled, state.isActive, state.isPaused, state.pomodoroRemainingSeconds, state.pomodoroMode, state.pomodoroCount, state.pomodoroStartTime, stopSession]);
 
   const contextValue = useMemo(
     () => ({

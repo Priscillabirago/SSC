@@ -166,34 +166,52 @@ def create_task(
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> TaskPublic:
-    task_data = payload.dict()
-    # Convert status enum to string value for storage
-    if 'status' in task_data and isinstance(task_data['status'], TaskStatus):
-        task_data['status'] = task_data['status'].value
-    # Convert subtasks list to JSON-compatible format
-    if 'subtasks' in task_data and task_data['subtasks'] is not None:
-        task_data['subtasks'] = [st.dict() if isinstance(st, Subtask) else st for st in task_data['subtasks']]
-    
-    # Handle recurring template
-    is_recurring = task_data.get('is_recurring_template', False)
-    recurrence_pattern = task_data.get('recurrence_pattern')
-    
-    task = Task(user_id=current_user.id, **task_data)
-    db.add(task)
-    db.commit()
-    db.refresh(task)
-    
-    # If this is a recurring template, generate initial instances
-    # Generate 2 weeks ahead by default (reduces clutter, instances auto-generate on completion)
-    if is_recurring and recurrence_pattern:
-        recurring_tasks.generate_recurring_instances(db, task, weeks_ahead=2)
-        # Clear deadline from template after generating instances
-        # (templates shouldn't have deadlines - only instances do)
-        task.deadline = None
+    try:
+        task_data = payload.dict()
+        # Convert status enum to string value for storage
+        if 'status' in task_data and isinstance(task_data['status'], TaskStatus):
+            task_data['status'] = task_data['status'].value
+        # Convert subtasks list to JSON-compatible format
+        if 'subtasks' in task_data and task_data['subtasks'] is not None:
+            task_data['subtasks'] = [st.dict() if isinstance(st, Subtask) else st for st in task_data['subtasks']]
+        
+        # Handle recurring template
+        is_recurring = task_data.get('is_recurring_template', False)
+        recurrence_pattern = task_data.get('recurrence_pattern')
+        
+        task = Task(user_id=current_user.id, **task_data)
+        db.add(task)
         db.commit()
         db.refresh(task)
-    
-    return _serialize_task(task)
+        
+        # If this is a recurring template, generate initial instances
+        # Generate 2 weeks ahead by default (reduces clutter, instances auto-generate on completion)
+        if is_recurring and recurrence_pattern:
+            try:
+                recurring_tasks.generate_recurring_instances(db, task, weeks_ahead=2)
+                # Clear deadline from template after generating instances
+                # (templates shouldn't have deadlines - only instances do)
+                task.deadline = None
+                db.commit()
+                db.refresh(task)
+            except Exception as e:
+                db.rollback()
+                logger.error(f"Error generating recurring instances for task {task.id}: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to generate recurring task instances"
+                ) from e
+        
+        return _serialize_task(task)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error creating task: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create task"
+        ) from e
 
 
 def _store_old_pattern(task: Task) -> dict | None:
@@ -249,6 +267,9 @@ def _sync_is_completed_with_status(task: Task, payload: TaskUpdate, fields_set: 
             if not task.completed_at:
                 from datetime import datetime, timezone
                 task.completed_at = datetime.now(timezone.utc)
+            # Clear prevent_auto_completion when user manually marks complete
+            # This allows auto-completion to work again if needed
+            task.prevent_auto_completion = False
         else:
             # payload.is_completed is False - unmark as complete
             # Only change status if it's currently COMPLETED
@@ -256,6 +277,11 @@ def _sync_is_completed_with_status(task: Task, payload: TaskUpdate, fields_set: 
                 task.status = TaskStatus.TODO.value
             # Always clear completed_at when unmarking as complete
             task.completed_at = None
+            # If user manually unmarks a task that has exceeded the estimate,
+            # prevent auto-completion so they can continue working
+            total_time = task.total_minutes_spent
+            if total_time >= task.estimated_minutes:
+                task.prevent_auto_completion = True
 
 
 def _sync_status_with_is_completed(
@@ -272,6 +298,8 @@ def _sync_status_with_is_completed(
         if not task.completed_at:
             from datetime import datetime, timezone
             task.completed_at = datetime.now(timezone.utc)
+        # Clear prevent_auto_completion when user manually marks complete
+        task.prevent_auto_completion = False
         if task.recurring_template_id and not task.is_recurring_template:
             try:
                 recurring_tasks.generate_next_instance_on_completion(db, task)
@@ -281,6 +309,11 @@ def _sync_status_with_is_completed(
         task.is_completed = False
         # Clear completed_at when unmarking as complete
         task.completed_at = None
+        # If user manually unmarks a task that has exceeded the estimate,
+        # prevent auto-completion so they can continue working
+        total_time = task.total_minutes_spent
+        if total_time >= task.estimated_minutes:
+            task.prevent_auto_completion = True
 
 
 def _handle_recurrence_pattern_update(
@@ -326,34 +359,44 @@ def update_task(
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> TaskPublic:
-    task = _get_task_or_404(db, task_id, current_user)
-    
-    # Store old values BEFORE applying updates
-    old_pattern = _store_old_pattern(task)
-    old_is_recurring_template = task.is_recurring_template
-    
-    update_data, fields_set = _parse_update_data(payload, task_id)
-    _apply_field_updates(task, update_data, fields_set, payload)
-    _sync_is_completed_with_status(task, payload, fields_set)
-    _sync_status_with_is_completed(task, payload, fields_set, db)
-    
-    # Handle removing recurrence (check old value since field may have been updated)
-    if 'is_recurring_template' in fields_set and not task.is_recurring_template and old_is_recurring_template:
-        # Recurrence is being removed - delete future instances
-        recurring_tasks.remove_recurrence(db, task)
-    else:
-        # Handle other recurrence pattern updates
-        _handle_recurrence_pattern_update(task, old_pattern, fields_set, db)
-        _handle_making_recurring(task, old_pattern, fields_set, db)
-    
-    # Clean up instances past end date if end date was set or updated
-    if 'recurrence_end_date' in fields_set and task.is_recurring_template:
-        recurring_tasks.cleanup_instances_past_end_date(db, task)
-    
-    db.add(task)
-    db.commit()
-    db.refresh(task)
-    return _serialize_task(task)
+    try:
+        task = _get_task_or_404(db, task_id, current_user)
+        
+        # Store old values BEFORE applying updates
+        old_pattern = _store_old_pattern(task)
+        old_is_recurring_template = task.is_recurring_template
+        
+        update_data, fields_set = _parse_update_data(payload, task_id)
+        _apply_field_updates(task, update_data, fields_set, payload)
+        _sync_is_completed_with_status(task, payload, fields_set)
+        _sync_status_with_is_completed(task, payload, fields_set, db)
+        
+        # Handle removing recurrence (check old value since field may have been updated)
+        if 'is_recurring_template' in fields_set and not task.is_recurring_template and old_is_recurring_template:
+            # Recurrence is being removed - delete future instances
+            recurring_tasks.remove_recurrence(db, task)
+        else:
+            # Handle other recurrence pattern updates
+            _handle_recurrence_pattern_update(task, old_pattern, fields_set, db)
+            _handle_making_recurring(task, old_pattern, fields_set, db)
+        
+        # Clean up instances past end date if end date was set or updated
+        if 'recurrence_end_date' in fields_set and task.is_recurring_template:
+            recurring_tasks.cleanup_instances_past_end_date(db, task)
+        
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+        return _serialize_task(task)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating task {task_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update task"
+        ) from e
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)

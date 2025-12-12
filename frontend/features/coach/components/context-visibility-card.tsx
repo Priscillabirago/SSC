@@ -10,6 +10,7 @@ import { useSubjects } from "@/features/subjects/hooks";
 import { useSessions } from "@/features/schedule/hooks";
 import { useAnalyticsOverview } from "@/features/dashboard/hooks";
 import { Skeleton } from "@/components/ui/skeleton";
+import { parseBackendDateTime, formatDate } from "@/lib/utils";
 
 export function ContextVisibilityCard() {
   const { data: tasks, isLoading: tasksLoading } = useTasks();
@@ -158,7 +159,7 @@ export function ContextVisibilityCard() {
                 <div className="space-y-1">
                   {upcomingSessions.map((session) => (
                     <div key={session.id} className="text-xs text-foreground truncate">
-                      • {new Date(session.start_time).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} - {session.focus || "Study session"}
+                      • {formatDate(session.start_time, { weekday: "short", month: "short", day: "numeric" })} - {session.focus || "Study session"}
                     </div>
                   ))}
                 </div>

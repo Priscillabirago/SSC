@@ -73,6 +73,7 @@ class TaskInDBBase(TaskBase):
     user_id: int
     is_completed: bool
     completed_at: datetime | None = None  # Timestamp when task was marked complete
+    prevent_auto_completion: bool = False  # If True, don't auto-complete even if time >= estimate
     recurring_template_id: int | None = None
     next_occurrence_date: datetime | None = None
     created_at: datetime

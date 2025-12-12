@@ -61,20 +61,35 @@ def _calculate_constraint_impact(
 ) -> dict[str, Any]:
     # reference is used in _local_day_start call below
     """Calculate how constraints reduce available time."""
+    from zoneinfo import ZoneInfo
+    
     week_start = _local_day_start(reference, user.timezone)
+    user_tz = ZoneInfo(user.timezone)
     
     total_blocked_hours = 0
     constraint_details = []
     
     for offset in range(7):
         day_start = week_start + timedelta(days=offset)
-        day_date = day_start.date()
+        # Convert to user's timezone to get correct LOCAL date
+        day_start_aware = day_start.replace(tzinfo=timezone.utc)
+        day_date = day_start_aware.astimezone(user_tz).date()
         
-        day_constraints = [
-            c for c in constraints
-            if (c.start_datetime and c.start_datetime.date() == day_date) or
-               (c.start_time and c.is_recurring and day_date.weekday() in (c.days_of_week or []))
-        ]
+        def constraint_applies_to_day(c: ScheduleConstraint) -> bool:
+            """Check if constraint applies to this day, using proper timezone conversion."""
+            if c.start_datetime:
+                # Convert constraint datetime to user's timezone for proper date comparison
+                c_dt = c.start_datetime
+                if c_dt.tzinfo is None:
+                    c_dt = c_dt.replace(tzinfo=timezone.utc)
+                c_local_date = c_dt.astimezone(user_tz).date()
+                if c_local_date == day_date:
+                    return True
+            if c.start_time and c.is_recurring and day_date.weekday() in (c.days_of_week or []):
+                return True
+            return False
+        
+        day_constraints = [c for c in constraints if constraint_applies_to_day(c)]
         
         for constraint in day_constraints:
             if constraint.start_time and constraint.end_time:
@@ -229,13 +244,22 @@ def _detect_deadline_clustering(
 
 
 def _check_exam_prep(
-    subjects: list[Subject], tasks: list[Task], reference: datetime
+    subjects: list[Subject], tasks: list[Task], reference: datetime, user_tz_str: str = "UTC"
 ) -> list[dict[str, Any]]:
     """Check if subjects with upcoming exams have prep scheduled."""
+    from zoneinfo import ZoneInfo
+    
     if reference.tzinfo is None:
         ref = reference.replace(tzinfo=timezone.utc)
     else:
         ref = reference.astimezone(timezone.utc)
+    
+    # Get reference date in user's local timezone for proper comparison
+    try:
+        user_tz = ZoneInfo(user_tz_str)
+        ref_local_date = ref.astimezone(user_tz).date()
+    except Exception:
+        ref_local_date = ref.date()
     
     missing_prep = []
     
@@ -243,7 +267,7 @@ def _check_exam_prep(
         if not subject.exam_date:
             continue
         
-        days_until_exam = (subject.exam_date - ref.date()).days
+        days_until_exam = (subject.exam_date - ref_local_date).days
         
         # Check if exam is in next 2-4 weeks
         if 14 <= days_until_exam <= 28:
@@ -315,7 +339,7 @@ def analyze_pre_generation(
     # Detect issues
     deadline_risks = _detect_deadline_risks(tasks, available_hours, ref)
     deadline_clusters = _detect_deadline_clustering(tasks, ref)
-    exam_prep_missing = _check_exam_prep(subjects, tasks, ref)
+    exam_prep_missing = _check_exam_prep(subjects, tasks, ref, user.timezone)
     
     # Generate warnings
     warnings = []
@@ -663,10 +687,14 @@ def _check_constraints_blocking_all_time(
     
     blocked_days = []
     week_start = _local_day_start(reference, user.timezone)
+    from zoneinfo import ZoneInfo
+    user_tz = ZoneInfo(user.timezone)
     
     for offset in range(7):
         day_start = week_start + timedelta(days=offset)
-        day_date = day_start.date()
+        # Convert to user's timezone to get correct LOCAL date
+        day_start_aware = day_start.replace(tzinfo=timezone.utc)
+        day_date = day_start_aware.astimezone(user_tz).date()
         
         # Check if this day has study windows configured
         preferred_windows_raw = user.preferred_study_windows
@@ -694,7 +722,16 @@ def _check_constraints_blocking_all_time(
                     effective_constraints.append(constraint)
             else:
                 if constraint.start_datetime and constraint.end_datetime:
-                    if constraint.start_datetime.date() <= day_date <= constraint.end_datetime.date():
+                    # Convert constraint datetimes to user's timezone for proper comparison
+                    c_start = constraint.start_datetime
+                    c_end = constraint.end_datetime
+                    if c_start.tzinfo is None:
+                        c_start = c_start.replace(tzinfo=timezone.utc)
+                    if c_end.tzinfo is None:
+                        c_end = c_end.replace(tzinfo=timezone.utc)
+                    c_start_local = c_start.astimezone(user_tz).date()
+                    c_end_local = c_end.astimezone(user_tz).date()
+                    if c_start_local <= day_date <= c_end_local:
                         effective_constraints.append(constraint)
         
         if not effective_constraints:

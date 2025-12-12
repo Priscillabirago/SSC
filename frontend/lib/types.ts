@@ -152,3 +152,26 @@ export interface ChatMessage {
   created_at?: string;
 }
 
+// Type for API error responses
+export interface ApiError {
+  response?: {
+    data?: {
+      detail?: string;
+      message?: string;
+    };
+  };
+  message?: string;
+}
+
+// Helper function to extract error message
+export function getErrorMessage(error: unknown, fallback = "An error occurred"): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "object" && error !== null) {
+    const apiError = error as ApiError;
+    return apiError?.response?.data?.detail || apiError?.response?.data?.message || apiError?.message || fallback;
+  }
+  return fallback;
+}
+

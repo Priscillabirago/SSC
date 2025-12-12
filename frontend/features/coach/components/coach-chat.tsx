@@ -16,7 +16,7 @@ import {
 } from "@/features/coach/hooks";
 import { format } from "date-fns";
 import { useQueryClient } from "@tanstack/react-query";
-import { parseBackendDateTime } from "@/lib/utils";
+import { parseBackendDateTime, getErrorMessage } from "@/lib/utils";
 
 interface CoachMessage {
   id: number;
@@ -127,11 +127,11 @@ export function CoachChat() {
 
       // Invalidate history to refresh
       queryClient.invalidateQueries({ queryKey: ["coach", "history"] });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         variant: "destructive",
         title: "Failed to get response",
-        description: error?.response?.data?.detail || "An error occurred",
+        description: getErrorMessage(error),
       });
     } finally {
       setIsSending(false);
@@ -147,11 +147,11 @@ export function CoachChat() {
       toast({
         title: "Chat history cleared",
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         variant: "destructive",
         title: "Failed to clear history",
-        description: error?.response?.data?.detail || "An error occurred",
+        description: getErrorMessage(error),
       });
     }
   };

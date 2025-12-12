@@ -112,12 +112,12 @@ def coach_suggest_plan(
         cleaned_reply = re.sub(r'\n{3,}', '\n\n', cleaned_reply)
         cleaned_reply = cleaned_reply.strip()
     
-    highlights = response.get("highlights")
-    if not highlights and cleaned_reply:
-        highlights = [line.strip("-• ") for line in cleaned_reply.splitlines() if line.strip()]
+    highlights = response.get("highlights") or []
+    # Only use auto-generated highlights if AI provided them
+    # Don't duplicate the summary as highlights
     suggestion = CoachPlanSuggestion(
         summary=cleaned_reply or "Stay consistent with your plan.",
-        highlights=highlights or [],
+        highlights=highlights,
         action_items=response.get("action_items", []),
     )
     coach_service.log_memory(
@@ -546,8 +546,16 @@ def apply_coach_proposal(
             elif action == "delete":
                 return handle_schedule_delete(details, db, current_user, study_session_model)
         return {"success": False, "error": "Not implemented for type/action"}
-    except Exception as e:
+    except HTTPException as e:
+        db.rollback()
+        return {"success": False, "error": e.detail}
+    except ValueError as e:
+        db.rollback()
         return {"success": False, "error": str(e)}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error applying coach proposal: {e}")
+        return {"success": False, "error": "An unexpected error occurred"}
 
 
 @router.get("/chat/history", response_model=list[CoachMessagePublic])

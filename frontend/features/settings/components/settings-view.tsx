@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, X, Clock, Mail, Lock, KeyRound } from "lucide-react";
+import { Plus, X, Clock, Mail, Lock, KeyRound, Play } from "lucide-react";
+import { useDemoMode } from "@/contexts/demo-mode-context";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -170,6 +171,7 @@ export function SettingsView() {
   const [selectedPresets, setSelectedPresets] = useState<StudyWindow[]>([]);
   const [customRanges, setCustomRanges] = useState<CustomTimeRange[]>([]);
   const [selectedTimezone, setSelectedTimezone] = useState<string>("UTC");
+  const { startDemo } = useDemoMode();
 
   useEffect(() => {
     if (profile) {
@@ -502,6 +504,31 @@ export function SettingsView() {
           </CardContent>
         </Card>
       </div>
+      
+      {/* Demo Mode Card */}
+      <Card className="border-primary/20 bg-gradient-to-br from-primary/5 to-transparent">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Play className="h-5 w-5 text-primary" />
+            Watch Demo
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Take a guided tour of all SSC features. Perfect for learning what the app can do or presenting to others.
+          </p>
+          <Button 
+            onClick={startDemo}
+            className="w-full gap-2"
+          >
+            <Play className="h-4 w-4" />
+            Start Guided Demo
+          </Button>
+          <p className="text-xs text-muted-foreground text-center">
+            ~3 minutes • Keyboard shortcuts available
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }

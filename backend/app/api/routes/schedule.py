@@ -123,61 +123,69 @@ def _sessions_overlap(
 def _persist_sessions_to_db(
     plan: WeeklyPlan, db: Session, current_user: User
 ) -> None:
-    """Delete old PLANNED sessions and persist new ones, preserving COMPLETED/PARTIAL sessions."""
+    """Delete old PLANNED sessions and persist new ones, preserving COMPLETED/PARTIAL sessions.
+    
+    Uses a transaction to ensure atomicity - either all changes succeed or none do.
+    This prevents issues with multiple rapid regenerations.
+    """
     window_start = plan.days[0].day
     window_end = plan.days[-1].day + timedelta(days=1)
     window_start_naive, window_end_naive = _normalize_window_times(window_start, window_end)
     
-    # Only delete PLANNED and SKIPPED sessions - preserve COMPLETED and PARTIAL
-    (
-        db.query(StudySession)
-        .filter(
-            StudySession.user_id == current_user.id,
-            StudySession.start_time >= window_start_naive,
-            StudySession.start_time < window_end_naive,
-            StudySession.status.in_([SessionStatus.PLANNED, SessionStatus.SKIPPED]),
+    try:
+        # Get preserved sessions BEFORE deletion to avoid race conditions
+        preserved_sessions = (
+            db.query(StudySession)
+            .filter(
+                StudySession.user_id == current_user.id,
+                StudySession.start_time >= window_start_naive,
+                StudySession.start_time < window_end_naive,
+                StudySession.status.in_([SessionStatus.COMPLETED, SessionStatus.PARTIAL]),
+            )
+            .all()
         )
-        .delete(synchronize_session=False)
-    )
-    
-    # Get preserved sessions to avoid time conflicts
-    preserved_sessions = (
-        db.query(StudySession)
-        .filter(
-            StudySession.user_id == current_user.id,
-            StudySession.start_time >= window_start_naive,
-            StudySession.start_time < window_end_naive,
-            StudySession.status.in_([SessionStatus.COMPLETED, SessionStatus.PARTIAL]),
+        
+        # Only delete PLANNED and SKIPPED sessions - preserve COMPLETED and PARTIAL
+        (
+            db.query(StudySession)
+            .filter(
+                StudySession.user_id == current_user.id,
+                StudySession.start_time >= window_start_naive,
+                StudySession.start_time < window_end_naive,
+                StudySession.status.in_([SessionStatus.PLANNED, SessionStatus.SKIPPED]),
+            )
+            .delete(synchronize_session=False)
         )
-        .all()
-    )
-    
-    # Add new sessions, avoiding conflicts with preserved ones
-    for day in plan.days:
-        for block in day.sessions:
-            # Check for any overlap with preserved sessions
-            has_overlap = any(
-                _sessions_overlap(
-                    block.start_time, block.end_time,
-                    preserved.start_time, preserved.end_time
+        
+        # Add new sessions, avoiding conflicts with preserved ones
+        for day in plan.days:
+            for block in day.sessions:
+                # Check for any overlap with preserved sessions
+                has_overlap = any(
+                    _sessions_overlap(
+                        block.start_time, block.end_time,
+                        preserved.start_time, preserved.end_time
+                    )
+                    for preserved in preserved_sessions
                 )
-                for preserved in preserved_sessions
-            )
-            if has_overlap:
-                continue  # Skip overlapping sessions to preserve completed work
-            
-            session = StudySession(
-                user_id=current_user.id,
-                subject_id=block.subject_id,
-                task_id=block.task_id,
-                start_time=block.start_time,
-                end_time=block.end_time,
-                status=SessionStatus.PLANNED,
-                energy_level=block.energy_level,
-                generated_by=block.generated_by,
-            )
-            db.add(session)
-    db.commit()
+                if has_overlap:
+                    continue  # Skip overlapping sessions to preserve completed work
+                
+                session = StudySession(
+                    user_id=current_user.id,
+                    subject_id=block.subject_id,
+                    task_id=block.task_id,
+                    start_time=block.start_time,
+                    end_time=block.end_time,
+                    status=SessionStatus.PLANNED,
+                    energy_level=block.energy_level,
+                    generated_by=block.generated_by,
+                )
+                db.add(session)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/generate", response_model=WeeklyPlan)
@@ -192,8 +200,23 @@ def generate_week_plan(
         use_ai_optimization: If True, AI will review and optimize the schedule
                             for better real-world efficiency (workload balancing,
                             circadian matching, etc.). Defaults to False.
+    
+    Note: Uses start of current day in user's timezone as reference time to ensure
+    consistent results across multiple regenerations within the same day.
     """
-    plan, rescheduling_info = generate_weekly_schedule(db, current_user)
+    # Use start of current day in user's timezone for consistent reference time
+    # This prevents issues where rapid regenerations skip past windows differently
+    from zoneinfo import ZoneInfo
+    try:
+        user_tz = ZoneInfo(current_user.timezone)
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+    
+    now_local = datetime.now(user_tz)
+    today_start_local = datetime.combine(now_local.date(), datetime.min.time()).replace(tzinfo=user_tz)
+    reference_time = today_start_local.astimezone(timezone.utc)
+    
+    plan, rescheduling_info = generate_weekly_schedule(db, current_user, reference=reference_time)
     
     optimization_explanation = None
     if use_ai_optimization:
@@ -465,9 +488,16 @@ def _handle_recurring_task_completion(db: Session, task: Task) -> None:
 
 
 def _update_task_completion_status(db: Session, task: Task, total_time: int, estimated_minutes: int) -> None:
-    """Update task completion status based on time spent."""
+    """Update task completion status based on time spent.
+    
+    Auto-completes tasks when total_time >= estimated_minutes.
+    However, if a task was manually unmarked (user unchecked it after auto-completion),
+    it won't auto-complete again - user must manually mark it complete.
+    """
     if total_time >= estimated_minutes:
-        if not task.is_completed:
+        # Only auto-complete if task is not already completed
+        # AND user hasn't disabled auto-completion (by manually unmarking it)
+        if not task.is_completed and not task.prevent_auto_completion:
             task.is_completed = True
             task.status = "completed"
             # Set completed_at when marking as complete
@@ -526,6 +556,7 @@ def update_session(
     session = _get_session_or_404(db, session_id, current_user.id)
     
     # Prevent modifying COMPLETED sessions (they're historical records)
+    # SessionStatus is imported at module level (line 10)
     if session.status == SessionStatus.COMPLETED and (payload.start_time is not None or payload.end_time is not None):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -560,12 +591,22 @@ def update_session(
     db.add(session)
     db.commit()
     
-    # Auto-update task progress when session status changes
-    if session.task_id and payload.status is not None:
+    # Auto-update task progress when:
+    # 1. Session status changes (completed/partial)
+    # 2. Session times change for completed/partial sessions (affects actual_minutes_spent)
+    if session.task_id:
         from app.models.task import Task
-        task = db.query(Task).filter(Task.id == session.task_id, Task.user_id == current_user.id).first()
-        if task:
-            _update_task_progress_from_session(db, task, current_user)
+        should_update = (
+            payload.status is not None  # Status changed
+            or (
+                (payload.start_time is not None or payload.end_time is not None)
+                and session.status in [SessionStatus.COMPLETED, SessionStatus.PARTIAL]
+            )  # Times changed for completed/partial session
+        )
+        if should_update:
+            task = db.query(Task).filter(Task.id == session.task_id, Task.user_id == current_user.id).first()
+            if task:
+                _update_task_progress_from_session(db, task, current_user)
     
     db.refresh(session)
     return _serialize_session(session)
@@ -592,13 +633,22 @@ def _get_session_or_404(
     return session
 
 
-def _determine_time_of_day(session_time: datetime) -> str:
-    """Determine time of day from session start time."""
+def _determine_time_of_day(session_time: datetime, user_tz_str: str = "UTC") -> str:
+    """Determine time of day from session start time in user's local timezone."""
     from datetime import timezone
+    from zoneinfo import ZoneInfo
     
     if session_time.tzinfo is None:
         session_time = session_time.replace(tzinfo=timezone.utc)
-    hour = session_time.hour
+    
+    # Convert to user's local timezone for proper time-of-day detection
+    try:
+        user_tz = ZoneInfo(user_tz_str)
+        local_time = session_time.astimezone(user_tz)
+    except Exception:
+        local_time = session_time
+    
+    hour = local_time.hour
     if 5 <= hour < 12:
         return "morning"
     if 12 <= hour < 17:
@@ -642,10 +692,10 @@ def _process_subtasks(task) -> list[dict]:
     return subtasks_list
 
 
-def _build_session_context(session: StudySession, task, subject) -> dict:
+def _build_session_context(session: StudySession, task, subject, user_tz: str = "UTC") -> dict:
     """Build session context dictionary for AI."""
     duration_minutes = int((session.end_time - session.start_time).total_seconds() // 60)
-    time_of_day = _determine_time_of_day(session.start_time)
+    time_of_day = _determine_time_of_day(session.start_time, user_tz)
     deadline_proximity = _calculate_deadline_proximity(task)
     subtasks_list = _process_subtasks(task)
     
@@ -684,7 +734,7 @@ def prepare_session(
     task = session.task
     subject = session.subject
     
-    session_context = _build_session_context(session, task, subject)
+    session_context = _build_session_context(session, task, subject, current_user.timezone)
     
     adapter = get_coach_adapter()
     user_context = coach_service.build_coach_context(db, current_user)

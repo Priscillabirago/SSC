@@ -30,7 +30,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatDate, formatTimer, localDateTimeToUTCISO } from "@/lib/utils";
+import { formatDate, formatTimer, localDateTimeToUTCISO, parseBackendDateTime } from "@/lib/utils";
 import type { Subject, Subtask, Task, TaskStatus, StudySession } from "@/lib/types";
 import { useDeleteTask, useGenerateSubtasks, useUpdateTask } from "@/features/tasks/hooks";
 import { useSessions } from "@/features/schedule/hooks";
@@ -362,7 +362,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   const generateSubtasks = useGenerateSubtasks();
   const { data: sessions } = useSessions();
   const { startSession } = useFocusSession();
-  const { stopQuickTrack, isActive: isQuickTrackActive, getElapsedTime } = useQuickTrack();
+  const { stopQuickTrack, isActive: isQuickTrackActive, getElapsedTime, getStartTime } = useQuickTrack();
   const [editId, setEditId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Partial<Task>>({});
   const [editAllFuture, setEditAllFuture] = useState(false);
@@ -545,24 +545,44 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
 
   // Helper: Process deadline with optional time
   const processDeadline = (payload: Partial<Task>, taskId: number): void => {
-    if (payload.deadline === undefined || payload.deadline === null) return;
+    // Handle clearing deadline (empty string should become null)
+    if (payload.deadline === "" || payload.deadline === undefined || payload.deadline === null) {
+      payload.deadline = null;
+      return;
+    }
     
     const timeInfo = editDeadlineTime.get(taskId);
     const datePart = extractDatePart(payload.deadline);
     
-    if (!datePart || !/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return;
+    // If date part is invalid, set deadline to null (clear it)
+    if (!datePart || !/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+      payload.deadline = null;
+      return;
+    }
     
     // Parse date components
     const year = Number.parseInt(datePart.slice(0, 4), 10);
     const month = Number.parseInt(datePart.slice(5, 7), 10);
     const day = Number.parseInt(datePart.slice(8, 10), 10);
     
+    // Validate parsed values
+    if (Number.isNaN(year) || Number.isNaN(month) || Number.isNaN(day) || month < 1 || month > 12 || day < 1 || day > 31) {
+      payload.deadline = null;
+      return;
+    }
+    
     if (timeInfo?.useTime && timeInfo.time && /^\d{2}:\d{2}$/.test(timeInfo.time)) {
       const timeParts = timeInfo.time.split(':');
       if (timeParts.length >= 2) {
         const [hours, minutes] = timeParts.map(Number);
-        // Use utility function to preserve date component when converting to UTC
-        payload.deadline = localDateTimeToUTCISO(year, month, day, hours, minutes);
+        // Validate time values
+        if (!Number.isNaN(hours) && !Number.isNaN(minutes) && hours >= 0 && hours < 24 && minutes >= 0 && minutes < 60) {
+          // Use utility function to preserve date component when converting to UTC
+          payload.deadline = localDateTimeToUTCISO(year, month, day, hours, minutes);
+        } else {
+          // Fallback to end of day if time parsing fails
+          payload.deadline = localDateTimeToUTCISO(year, month, day, 23, 59);
+        }
       } else {
         // Fallback to end of day if time parsing fails
         payload.deadline = localDateTimeToUTCISO(year, month, day, 23, 59);
@@ -619,7 +639,11 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     const payload = { ...draft };
     payload.subject_id ??= null;
     
-    processDeadline(payload, task.id);
+    // Always process deadline if it's in the draft (user edited it) or if we need to clear it
+    // This ensures deadline updates are sent to backend
+    if ('deadline' in draft) {
+      processDeadline(payload, task.id);
+    }
     
     const handleSaveSuccess = createSaveSuccessHandler(task);
     
@@ -690,13 +714,15 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   // Helper function to get deadline styling
   const getDeadlineStyle = (deadline: string | null | undefined): string => {
     if (!deadline) return "";
-    const deadlineDate = new Date(deadline);
+    // Use parseBackendDateTime to handle UTC correctly, then use UTC date components
+    const deadlineDate = parseBackendDateTime(deadline);
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const deadlineDateOnly = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
-    if (deadlineDateOnly < today) {
+    // Use UTC date components for comparison to avoid timezone shifts
+    const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const deadlineDateOnlyUTC = new Date(Date.UTC(deadlineDate.getUTCFullYear(), deadlineDate.getUTCMonth(), deadlineDate.getUTCDate()));
+    if (deadlineDateOnlyUTC < todayUTC) {
       return "text-red-600 font-medium";
-    } else if (deadlineDateOnly.getTime() === today.getTime()) {
+    } else if (deadlineDateOnlyUTC.getTime() === todayUTC.getTime()) {
       return "text-amber-600 font-medium";
     }
     return "";
@@ -741,14 +767,24 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   // Helper function to render actual time display
   const renderActualTime = (task: Task) => {
     const currentElapsed = elapsedTimes.get(task.id) ?? 0;
-    // Use total_minutes_spent (session + timer) if available, otherwise calculate
-    const totalActual = task.total_minutes_spent ?? ((task.actual_minutes_spent ?? 0) + (task.timer_minutes_spent ?? 0)) + currentElapsed;
-    const displayActual = totalActual > 0 ? totalActual : (task.total_minutes_spent ?? task.actual_minutes_spent);
+    // Use total_minutes_spent if available (backend computed property)
+    // Otherwise calculate: actual_minutes_spent (sessions) + timer_minutes_spent (timers)
+    // Only add currentElapsed if there's an active timer that hasn't been saved yet
+    let totalActual: number;
+    if (typeof task.total_minutes_spent === "number") {
+      // Backend computed property is authoritative
+      totalActual = task.total_minutes_spent + currentElapsed;
+    } else {
+      // Fallback calculation
+      const sessionTime = task.actual_minutes_spent ?? 0;
+      const timerTime = task.timer_minutes_spent ?? 0;
+      totalActual = sessionTime + timerTime + currentElapsed;
+    }
     
-    if (displayActual != null && displayActual > 0) {
+    if (totalActual > 0) {
       return (
-        <span className={displayActual > task.estimated_minutes ? "text-red-600" : "text-green-600"}>
-          {" "}• Actual: {formatTimer(displayActual)}
+        <span className={totalActual > task.estimated_minutes ? "text-red-600" : "text-green-600"}>
+          {" "}• Actual: {formatTimer(totalActual)}
         </span>
       );
     }
@@ -1047,14 +1083,16 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     if (filter === "no_deadline") return !hasDeadline;
     if (!hasDeadline) return false;
 
-    const deadline = new Date(task.deadline!);
+    // Use parseBackendDateTime to handle UTC correctly, then use UTC date components
+    const deadline = parseBackendDateTime(task.deadline!);
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    // Use UTC date components for comparison to avoid timezone shifts
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const weekFromNow = new Date(today);
-    weekFromNow.setDate(weekFromNow.getDate() + 7);
+    weekFromNow.setUTCDate(weekFromNow.getUTCDate() + 7);
     const monthFromNow = new Date(today);
-    monthFromNow.setMonth(monthFromNow.getMonth() + 1);
-    const deadlineDate = new Date(deadline.getFullYear(), deadline.getMonth(), deadline.getDate());
+    monthFromNow.setUTCMonth(monthFromNow.getUTCMonth() + 1);
+    const deadlineDate = new Date(Date.UTC(deadline.getUTCFullYear(), deadline.getUTCMonth(), deadline.getUTCDate()));
 
     switch (filter) {
       case "overdue": {
@@ -1064,18 +1102,18 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
         return deadlineDate.getTime() === today.getTime();
       }
       case "this_week": {
-        // Calculate start of current week (Sunday = 0, Monday = 1)
-        const dayOfWeek = today.getDay();
+        // Calculate start of current week (Sunday = 0, Monday = 1) using UTC
+        const dayOfWeek = today.getUTCDay();
         const startOfWeek = new Date(today);
-        startOfWeek.setDate(today.getDate() - dayOfWeek); // Go back to Sunday
-        startOfWeek.setHours(0, 0, 0, 0);
+        startOfWeek.setUTCDate(today.getUTCDate() - dayOfWeek); // Go back to Sunday
+        startOfWeek.setUTCHours(0, 0, 0, 0);
         
-        // Calculate end of current week (Saturday)
+        // Calculate end of current week (Saturday) using UTC
         const endOfWeek = new Date(startOfWeek);
-        endOfWeek.setDate(startOfWeek.getDate() + 6);
-        endOfWeek.setHours(23, 59, 59, 999);
+        endOfWeek.setUTCDate(startOfWeek.getUTCDate() + 6);
+        endOfWeek.setUTCHours(23, 59, 59, 999);
         
-        return deadline >= startOfWeek && deadline <= endOfWeek;
+        return deadlineDate.getTime() >= startOfWeek.getTime() && deadlineDate.getTime() <= endOfWeek.getTime();
       }
       case "this_month": {
         return deadline >= today && deadline <= monthFromNow;
@@ -1432,7 +1470,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
                 </TooltipTrigger>
                 <TooltipContent>
                   <p className="max-w-xs">
-                    Actual time is automatically calculated from completed study sessions and cannot be manually edited.
+                    Total time spent = session time (from scheduled sessions) + timer time (from Quick Track). Automatically calculated and cannot be manually edited.
                   </p>
                 </TooltipContent>
               </Tooltip>
@@ -1442,7 +1480,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
             className="h-7 w-24 text-xs bg-muted/50 cursor-not-allowed"
             type="number"
             min="0"
-            value={task.actual_minutes_spent ?? ""}
+            value={task.total_minutes_spent ?? ""}
             disabled
             placeholder="Auto"
             readOnly
@@ -1461,17 +1499,17 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
               value={(() => {
                 const deadlineStr = draft.deadline || task.deadline;
                 if (!deadlineStr) return "";
-                // Parse as UTC, then convert to local date for the input
+                // Parse as UTC, then extract UTC date components (preserves the date the user selected)
                 let deadlineDate: Date;
                 if (deadlineStr.includes('Z') || deadlineStr.includes('+') || deadlineStr.includes('-', 10)) {
                   deadlineDate = new Date(deadlineStr);
                 } else {
                   deadlineDate = new Date(deadlineStr + 'Z');
                 }
-                // Format as YYYY-MM-DD in local timezone
-                const year = deadlineDate.getFullYear();
-                const month = String(deadlineDate.getMonth() + 1).padStart(2, '0');
-                const day = String(deadlineDate.getDate()).padStart(2, '0');
+                // Use UTC methods to preserve the date component (since we store as UTC)
+                const year = deadlineDate.getUTCFullYear();
+                const month = String(deadlineDate.getUTCMonth() + 1).padStart(2, '0');
+                const day = String(deadlineDate.getUTCDate()).padStart(2, '0');
                 return `${year}-${month}-${day}`;
               })()}
               onChange={e => setDraft((d) => ({ ...d, deadline: e.target.value }))}
@@ -1838,30 +1876,54 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
           className="h-7 text-xs"
           onFocusSessionStart={() => {
             const taskSubject = task.subject_id ? subjects.find((s) => s.id === task.subject_id) : null;
+            // Get Quick Track start time BEFORE stopping (since stopQuickTrack removes it)
+            const quickTrackStartTime = isQuickTrackActive(task.id) ? getStartTime(task.id) : null;
+            
             // Calculate Quick Track time to preserve
             const quickTrackTimeMs = isQuickTrackActive(task.id)
               ? getElapsedTime(task.id) * 60 * 1000
               : 0;
             
-            // If Quick Track is active, stop it first (but preserve time)
+            // Helper to start Focus Mode (called after Quick Track time is saved)
+            const startFocusMode = () => {
+              const tempSession = createSessionFromTask(task);
+              startSession(tempSession, task, taskSubject || null, quickTrackTimeMs, quickTrackStartTime);
+              updateTask.mutate(
+                { id: task.id, payload: { status: "in_progress" } },
+                { onSuccess: () => toast({ title: "Focus session started", description: "Entering focus mode..." }) }
+              );
+            };
+            
+            // If Quick Track is active, stop it first and wait for mutation to complete
             if (isQuickTrackActive(task.id)) {
               const elapsed = stopQuickTrack(task.id, true);
-              // Update task timer
               const currentTimer = task.timer_minutes_spent ?? 0;
-              updateTask.mutate({
-                id: task.id,
-                payload: {
-                  timer_minutes_spent: currentTimer + elapsed,
-                  status: "in_progress",
+              updateTask.mutate(
+                {
+                  id: task.id,
+                  payload: {
+                    timer_minutes_spent: currentTimer + elapsed,
+                    status: "in_progress",
+                  },
                 },
-              });
+                {
+                  onSuccess: () => {
+                    // Only start Focus Mode after Quick Track time is successfully saved
+                    startFocusMode();
+                  },
+                  onError: () => {
+                    toast({
+                      variant: "destructive",
+                      title: "Failed to save Quick Track time",
+                      description: "Could not convert to Focus Mode. Please try again.",
+                    });
+                  },
+                }
+              );
+            } else {
+              // No Quick Track active, start Focus Mode immediately
+              startFocusMode();
             }
-            const tempSession = createSessionFromTask(task);
-            startSession(tempSession, task, taskSubject || null, quickTrackTimeMs);
-            updateTask.mutate(
-              { id: task.id, payload: { status: "in_progress" } },
-              { onSuccess: () => toast({ title: "Focus session started", description: "Entering focus mode..." }) }
-            );
           }}
         />
       )}
@@ -1894,7 +1956,11 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
               className="h-7 w-7"
               onClick={() => {
                 setEditId(task.id); 
-                setDraft(task);
+                // Initialize draft with task data, ensuring deadline is included
+                setDraft({
+                  ...task,
+                  deadline: task.deadline || undefined, // Ensure deadline is explicitly set
+                });
                 // Initialize time state if deadline has time
                 if (task.deadline) {
                   // Backend sends UTC datetime, interpret as UTC then convert to local

@@ -47,7 +47,7 @@ export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
   const prepareSession = usePrepareSession();
   const updateTask = useUpdateTask();
   const { startSession } = useFocusSession();
-  const { stopQuickTrack, isActive: isQuickTrackActive, getElapsedTime } = useQuickTrack();
+  const { stopQuickTrack, isActive: isQuickTrackActive, getElapsedTime, getStartTime } = useQuickTrack();
   const [expandedSessions, setExpandedSessions] = useState<Set<number>>(new Set());
   const [preparationData, setPreparationData] = useState<Map<number, { tips: string[]; strategy: string; rationale: string }>>(new Map());
   const [loadingPreparation, setLoadingPreparation] = useState<Set<number>>(new Set());
@@ -420,28 +420,54 @@ export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
                                       const sessionTask = getTaskForSession(session);
                                       const sessionSubject = getSubjectForSession(session);
                                       
+                                      // Get Quick Track start time BEFORE stopping (since stopQuickTrack removes it)
+                                      const quickTrackStartTime = sessionTask && isQuickTrackActive(sessionTask.id)
+                                        ? getStartTime(sessionTask.id)
+                                        : null;
+                                      
                                       // Calculate Quick Track time if active
                                       const quickTrackTimeMs = sessionTask && isQuickTrackActive(sessionTask.id)
                                         ? getElapsedTime(sessionTask.id) * 60 * 1000
                                         : 0;
                                       
-                                      // Stop Quick Track if active and save time
+                                      // Helper to start Focus Mode (called after Quick Track time is saved)
+                                      const startFocusMode = () => {
+                                        startSession(session, sessionTask || null, sessionSubject || null, quickTrackTimeMs, quickTrackStartTime);
+                                        toast({
+                                          title: "Focus session started",
+                                          description: "Entering focus mode...",
+                                        });
+                                      };
+                                      
+                                      // Stop Quick Track if active and save time - wait for mutation to complete
                                       if (sessionTask && isQuickTrackActive(sessionTask.id)) {
                                         const elapsed = stopQuickTrack(sessionTask.id, true);
                                         const currentTimer = sessionTask.timer_minutes_spent ?? 0;
-                                        updateTask.mutate({
-                                          id: sessionTask.id,
-                                          payload: {
-                                            timer_minutes_spent: currentTimer + elapsed,
+                                        updateTask.mutate(
+                                          {
+                                            id: sessionTask.id,
+                                            payload: {
+                                              timer_minutes_spent: currentTimer + elapsed,
+                                            },
                                           },
-                                        });
+                                          {
+                                            onSuccess: () => {
+                                              // Only start Focus Mode after Quick Track time is successfully saved
+                                              startFocusMode();
+                                            },
+                                            onError: () => {
+                                              toast({
+                                                variant: "destructive",
+                                                title: "Failed to save Quick Track time",
+                                                description: "Could not convert to Focus Mode. Please try again.",
+                                              });
+                                            },
+                                          }
+                                        );
+                                      } else {
+                                        // No Quick Track active, start Focus Mode immediately
+                                        startFocusMode();
                                       }
-                                      
-                                      startSession(session, sessionTask || null, sessionSubject || null, quickTrackTimeMs);
-                                      toast({
-                                        title: "Focus session started",
-                                        description: "Entering focus mode...",
-                                      });
                                     }}
                                   />
                                 )}

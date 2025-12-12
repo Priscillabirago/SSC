@@ -9,6 +9,7 @@ import {
   ToastDescription,
   ToastProvider,
   ToastTitle,
+  ToastViewport,
 } from "@/components/ui/toast";
 
 const TOAST_LIMIT = 3;
@@ -205,9 +206,10 @@ function Toaster() {
           </Toast>
         );
       })}
+      <ToastViewport />
     </ToastProvider>
   );
 }
 
-export { Toast, ToastAction, ToastDescription, ToastProvider, ToastTitle, Toaster, toast, useToast };
+export { Toast, ToastAction, ToastDescription, ToastProvider, ToastTitle, ToastViewport, Toaster, toast, useToast };
 

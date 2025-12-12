@@ -33,6 +33,8 @@ export function useUpdateSession() {
       updateSession(sessionId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["schedule", "sessions"] });
+      // Invalidate tasks query because session status changes update actual_minutes_spent
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
     }
   });
 }

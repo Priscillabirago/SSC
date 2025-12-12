@@ -12,20 +12,49 @@ export function formatDate(value?: string | null, options?: Intl.DateTimeFormatO
   const date = parseBackendDateTime(value);
   
   // Check if time is set to a specific time (not midnight 00:00 or default end-of-day 23:59)
-  // Use UTC hours/minutes to check, but format in local time
+  // Use UTC hours/minutes to check
   const utcHours = date.getUTCHours();
   const utcMinutes = date.getUTCMinutes();
   const hasSpecificTime = !(utcHours === 0 && utcMinutes === 0) && !(utcHours === 23 && utcMinutes === 59);
   
-  // If no specific options provided and time exists, include time
-  if (!options && hasSpecificTime) {
-    return new Intl.DateTimeFormat(undefined, { 
-      dateStyle: "medium",
-      timeStyle: "short"
-    }).format(date);
+  // For date-only formatting, use UTC date components to preserve the date the user selected
+  // This prevents timezone shifts from showing the wrong date
+  if (!options || (!options.timeStyle && !options.hour && !options.minute)) {
+    if (!options && hasSpecificTime) {
+      // When there's a specific time, convert UTC to local and use local date/time
+      // This ensures both date and time are correct
+      const localYear = date.getFullYear();
+      const localMonth = date.getMonth();
+      const localDay = date.getDate();
+      const localHours = date.getHours();
+      const localMinutes = date.getMinutes();
+      
+      // Create date in local timezone for formatting
+      const dateForFormatting = new Date(localYear, localMonth, localDay, localHours, localMinutes);
+      
+      const timeStr = dateForFormatting.toLocaleTimeString(undefined, { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: true
+      });
+      const dateStr = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(dateForFormatting);
+      return `${dateStr}, ${timeStr}`;
+    }
+    
+    // Date-only formatting - use UTC components to preserve the selected date
+    const utcYear = date.getUTCFullYear();
+    const utcMonth = date.getUTCMonth();
+    const utcDay = date.getUTCDate();
+    
+    // Create a date object with UTC components but in local timezone for formatting
+    // This ensures the date component is preserved
+    const dateForFormatting = new Date(utcYear, utcMonth, utcDay);
+    
+    return new Intl.DateTimeFormat(undefined, options ?? { dateStyle: "medium" }).format(dateForFormatting);
   }
   
-  return new Intl.DateTimeFormat(undefined, options ?? { dateStyle: "medium" }).format(date);
+  // If options specify time formatting, use the original date (which includes timezone conversion)
+  return new Intl.DateTimeFormat(undefined, options).format(date);
 }
 
 /**
@@ -87,14 +116,15 @@ export function formatTimer(minutes: number | null | undefined): string {
 }
 
 /**
- * Convert a local date/time to UTC ISO string, preserving the date component.
- * This ensures that a user setting "Dec 10 23:59" in their local timezone
- * results in a UTC time that, when displayed back in their local timezone,
- * still shows as "Dec 10" (not "Dec 11").
+ * Convert a local date/time to UTC ISO string, preserving BOTH date and time.
  * 
- * The solution: Create the date at midnight UTC for the given date components,
- * then add the hours/minutes. This ensures the date component is preserved
- * regardless of timezone offset.
+ * Strategy: Store the local time converted to UTC. When displaying:
+ * - formatDate will convert UTC back to local time
+ * - This preserves both the date and time the user entered
+ * 
+ * Example: User in UTC+8 enters Dec 12, 7:00 AM
+ * - Store as: Dec 11, 11:00 PM UTC (7am - 8 hours)
+ * - Display: Dec 12, 7:00 AM (formatDate converts UTC to local)
  */
 export function localDateTimeToUTCISO(
   year: number,
@@ -103,10 +133,26 @@ export function localDateTimeToUTCISO(
   hours: number = 23,
   minutes: number = 59
 ): string {
-  // Create date at midnight UTC for the given date components
-  // This preserves the date (year, month, day) regardless of local timezone
-  const utcDate = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0, 0));
+  // Create date in local timezone (what user actually entered)
+  const localDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
   
-  return utcDate.toISOString();
+  // Convert to UTC ISO string
+  // This stores the local time as UTC (may shift date, but formatDate handles it)
+  return localDate.toISOString();
+}
+
+/**
+ * Extract error message from unknown error type.
+ * Handles Error instances, API error responses, and other error formats.
+ */
+export function getErrorMessage(error: unknown, fallback = "An error occurred"): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "object" && error !== null) {
+    const apiError = error as { response?: { data?: { detail?: string; message?: string } }; message?: string };
+    return apiError?.response?.data?.detail || apiError?.response?.data?.message || apiError?.message || fallback;
+  }
+  return fallback;
 }
 

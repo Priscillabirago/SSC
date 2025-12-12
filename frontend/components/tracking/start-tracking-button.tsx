@@ -41,7 +41,7 @@ export function StartTrackingButton({
   onFocusSessionStart,
 }: Readonly<StartTrackingButtonProps>) {
   const { state: focusState, startSession } = useFocusSession();
-  const { isActive: isQuickTrackActive, getElapsedTime, startQuickTrack, stopQuickTrack } = useQuickTrack();
+  const { isActive: isQuickTrackActive, getElapsedTime, getStartTime, startQuickTrack, stopQuickTrack } = useQuickTrack();
   const updateTask = useUpdateTask();
   const [open, setOpen] = useState(false);
   
@@ -109,48 +109,76 @@ export function StartTrackingButton({
 
   // Handle Focus Session start
   const handleFocusSessionStart = () => {
+    // Get Quick Track start time BEFORE stopping (since stopQuickTrack removes it)
+    const quickTrackStartTime = task && activeQuickTrack ? getStartTime(task.id) : null;
+    
     // Calculate Quick Track time to preserve
     const quickTrackTimeMs = activeQuickTrack && quickTrackTime > 0 
       ? quickTrackTime * 60 * 1000 
       : 0;
 
-    // If Quick Track is active, stop it first (conversion) - save time to task
+    // Helper function to start Focus Mode (called after Quick Track time is saved)
+    const startFocusMode = () => {
+      if (onFocusSessionStart) {
+        onFocusSessionStart();
+      } else if (session) {
+        // Use the provided session, preserving Quick Track time
+        startSession(session, task || null, subject || null, quickTrackTimeMs, quickTrackStartTime);
+      } else if (task) {
+        // Create temporary session from task
+        const now = new Date();
+        const duration = task.estimated_minutes || 60;
+        const endTime = new Date(now.getTime() + duration * 60 * 1000);
+        
+        const tempSession: StudySession = {
+          id: -1,
+          user_id: 0,
+          task_id: task.id,
+          subject_id: task.subject_id || null,
+          start_time: now.toISOString(),
+          end_time: endTime.toISOString(),
+          status: "planned",
+          focus: task.title,
+        };
+        
+        startSession(tempSession, task, subject || null, quickTrackTimeMs, quickTrackStartTime);
+      }
+      setOpen(false);
+    };
+
+    // If Quick Track is active, stop it first and wait for mutation to complete
+    // This prevents race condition where Quick Track time could be lost if mutation fails
     if (activeQuickTrack && task) {
       const elapsed = stopQuickTrack(task.id, true);
       const currentTimer = task.timer_minutes_spent ?? 0;
-      updateTask.mutate({
-        id: task.id,
-        payload: {
-          timer_minutes_spent: currentTimer + elapsed,
+      updateTask.mutate(
+        {
+          id: task.id,
+          payload: {
+            timer_minutes_spent: currentTimer + elapsed,
+          },
         },
-      });
+        {
+          onSuccess: () => {
+            // Only start Focus Mode after Quick Track time is successfully saved
+            startFocusMode();
+          },
+          onError: (error) => {
+            // If mutation fails, show error and don't start Focus Mode
+            // Quick Track timer is already stopped, but time is lost
+            toast({
+              variant: "destructive",
+              title: "Failed to save Quick Track time",
+              description: "Could not convert to Focus Mode. Please try again.",
+            });
+            setOpen(false);
+          },
+        }
+      );
+    } else {
+      // No Quick Track active, start Focus Mode immediately
+      startFocusMode();
     }
-
-    if (onFocusSessionStart) {
-      onFocusSessionStart();
-    } else if (session) {
-      // Use the provided session, preserving Quick Track time
-      startSession(session, task || null, subject || null, quickTrackTimeMs);
-    } else if (task) {
-      // Create temporary session from task
-      const now = new Date();
-      const duration = task.estimated_minutes || 60;
-      const endTime = new Date(now.getTime() + duration * 60 * 1000);
-      
-      const tempSession: StudySession = {
-        id: -1,
-        user_id: 0,
-        task_id: task.id,
-        subject_id: task.subject_id || null,
-        start_time: now.toISOString(),
-        end_time: endTime.toISOString(),
-        status: "planned",
-        focus: task.title,
-      };
-      
-      startSession(tempSession, task, subject || null, quickTrackTimeMs);
-    }
-    setOpen(false);
   };
 
   // If in focus mode, show active indicator
@@ -189,6 +217,7 @@ export function StartTrackingButton({
                   variant="outline"
                   size={size}
                   className={cn("gap-2", className)}
+                  data-tour="quick-track-button"
                 >
                   <Clock className="h-3 w-3 animate-pulse" />
                   <span className="hidden sm:inline">{formatTime(quickTrackTime)}</span>
@@ -208,7 +237,7 @@ export function StartTrackingButton({
             <Clock className="h-4 w-4 mr-2" />
             Stop Quick Track
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={handleFocusSessionStart}>
+          <DropdownMenuItem onClick={handleFocusSessionStart} data-tour="focus-session-button">
             <Target className="h-4 w-4 mr-2" />
             Convert to Focus Session
           </DropdownMenuItem>
@@ -225,6 +254,7 @@ export function StartTrackingButton({
           variant={variant}
           size={size}
           className={cn("gap-2", className)}
+          data-tour="quick-track-button"
         >
           <PlayCircle className="h-3 w-3" />
           <span className="hidden sm:inline">Start Tracking</span>
@@ -251,7 +281,7 @@ export function StartTrackingButton({
         )}
         
         {canFocusSession && (
-          <DropdownMenuItem onClick={handleFocusSessionStart}>
+          <DropdownMenuItem onClick={handleFocusSessionStart} data-tour="focus-session-button">
             <Target className="h-4 w-4 mr-2 text-primary" />
             <div className="flex flex-col">
               <span className="font-medium">Focus Session</span>

@@ -13,6 +13,7 @@ interface QuickTrackContextType {
   stopQuickTrack: (taskId: number, saveTime: boolean) => number; // Returns elapsed minutes
   isActive: (taskId: number) => boolean;
   getElapsedTime: (taskId: number) => number; // Returns elapsed minutes
+  getStartTime: (taskId: number) => number | null; // Returns start time timestamp or null
 }
 
 const QuickTrackContext = createContext<QuickTrackContextType | undefined>(undefined);
@@ -109,6 +110,10 @@ export function QuickTrackProvider({ children }: { readonly children: React.Reac
     return elapsedTimes.get(taskId) || 0;
   }, [elapsedTimes]);
 
+  const getStartTime = useCallback((taskId: number): number | null => {
+    return activeTimers.get(taskId) || null;
+  }, [activeTimers]);
+
   const contextValue = useMemo(
     () => ({
       state: { activeTimers, elapsedTimes },
@@ -116,8 +121,9 @@ export function QuickTrackProvider({ children }: { readonly children: React.Reac
       stopQuickTrack,
       isActive,
       getElapsedTime,
+      getStartTime,
     }),
-    [activeTimers, elapsedTimes, startQuickTrack, stopQuickTrack, isActive, getElapsedTime]
+    [activeTimers, elapsedTimes, startQuickTrack, stopQuickTrack, isActive, getElapsedTime, getStartTime]
   );
 
   return (

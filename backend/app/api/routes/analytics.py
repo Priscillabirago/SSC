@@ -255,11 +255,21 @@ def get_overview(
     streak = _calculate_streak_for_overview(streak_sessions, current_user.timezone)
     
     # Calculate weekly hours completed (from completed and partial sessions)
+    # Use end_time filter to count work that was actually completed this week
+    # (regardless of when it started - this measures "work done this week")
     # Partial sessions count toward hours/streak but not adherence
+    weekly_sessions = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.end_time >= seven_days_ago,  # Count sessions that ended this week
+            StudySession.status.in_([SessionStatus.COMPLETED, SessionStatus.PARTIAL])
+        )
+        .all()
+    )
     weekly_completed_minutes = sum(
         int((session.end_time - session.start_time).total_seconds() // 60)
-        for session in sessions
-        if session.status in (SessionStatus.COMPLETED, SessionStatus.PARTIAL)
+        for session in weekly_sessions
     )
     weekly_hours_completed = round(weekly_completed_minutes / 60.0, 1)
 
@@ -776,8 +786,8 @@ def get_detailed_analytics(
         all_sessions, all_tasks, subject_lookup, task_to_subject
     )
     energy_productivity_list = _calculate_energy_productivity(all_sessions)
-    day_adherence_list = _calculate_day_adherence(all_sessions)
-    trend = _calculate_productivity_trend_for_range(all_sessions, start_date, end_date)
+    day_adherence_list = _calculate_day_adherence(all_sessions, current_user.timezone)
+    trend = _calculate_productivity_trend_for_range(all_sessions, start_date, end_date, current_user.timezone)
     time_distribution = _calculate_time_distribution_for_overview(all_sessions, db, current_user)
     
     # Overall adherence: exclude SKIPPED sessions from denominator

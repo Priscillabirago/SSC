@@ -39,11 +39,13 @@ export function PlanSuggestionCard() {
         {suggestion.data ? (
           <>
             <p className="font-medium text-foreground">{suggestion.data.summary}</p>
+            {suggestion.data.highlights && suggestion.data.highlights.length > 0 && (
             <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
-              {suggestion.data.highlights?.map((item) => (
-                <li key={item}>{item}</li>
+                {suggestion.data.highlights.map((item, index) => (
+                  <li key={`${item}-${index}`}>{item}</li>
               ))}
             </ul>
+            )}
           </>
         ) : (
           <p className="text-muted-foreground">
