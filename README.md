@@ -1,4 +1,4 @@
-# SSC (Smart Study Companion)
+# SSC (Smart Study Companion) 
 
 An AI-driven study organizer and academic coach for students. Features intelligent scheduling, task management, focus sessions, and personalized coaching.
 
@@ -43,9 +43,13 @@ uvicorn app.main:app --reload
 - The backend will use a local SQLite file (`../smart_study_companion.db`) for storage.
 
 
-## Frontend Setup (from project root)
+## 3. Frontend Setup (from project root)
+
+```
 cd frontend
 npm install
 npm run dev
+```
+
 
 
