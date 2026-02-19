@@ -21,6 +21,19 @@ interface TrendChartProps {
   readonly data: { day: string; completed_minutes: number; scheduled_minutes: number }[];
 }
 
+// Helper function to format minutes as hours and minutes when > 60
+function formatMinutes(minutes: number): string {
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (mins === 0) {
+    return `${hours}h`;
+  }
+  return `${hours}h ${mins}m`;
+}
+
 export function ProductivityTrendChart({ data }: TrendChartProps) {
   const labels = data.map((point) => format(parseISO(point.day), "EEE"));
 
@@ -85,13 +98,25 @@ export function ProductivityTrendChart({ data }: TrendChartProps) {
             plugins: {
               legend: {
                 position: "bottom"
+              },
+              tooltip: {
+                callbacks: {
+                  label: function(context: any) {
+                    const label = context.dataset.label || '';
+                    const value = context.parsed.y;
+                    return `${label}: ${formatMinutes(value)}`;
+                  }
+                }
               }
             },
             scales: {
               y: {
                 beginAtZero: true,
                 ticks: {
-                  stepSize: 30
+                  stepSize: 60, // 1 hour intervals
+                  callback: function(value: any) {
+                    return formatMinutes(value);
+                  }
                 }
               }
             }

@@ -1,18 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Info, Calendar } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { NewSubjectDialog } from "@/features/subjects/components/new-subject-dialog";
-import { SubjectCard } from "@/features/subjects/components/subject-card";
+import { ManageSubjectsDialog } from "@/features/subjects/components/manage-subjects-dialog";
 import { useSubjects } from "@/features/subjects/hooks";
 import { NewTaskDialog } from "@/features/tasks/components/new-task-dialog";
 import { TaskList } from "@/features/tasks/components/task-list";
 import { useTasks } from "@/features/tasks/hooks";
+import { cn } from "@/lib/utils";
 
 export function TasksView() {
   const router = useRouter();
@@ -21,6 +21,25 @@ export function TasksView() {
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | "all">("all");
   
   const hasActiveTasks = tasks?.some(t => !t.is_completed && !t.is_recurring_template) ?? false;
+
+  // Calculate task counts for each subject
+  const subjectTaskCounts = useMemo(() => {
+    if (!tasks || !subjects) return new Map();
+    const counts = new Map<number | "all", number>();
+    
+    // Count "all"
+    counts.set("all", tasks.filter(t => !t.is_completed && !t.is_recurring_template).length);
+    
+    // Count per subject
+    subjects.forEach(subject => {
+      counts.set(
+        subject.id,
+        tasks.filter(t => !t.is_completed && !t.is_recurring_template && t.subject_id === subject.id).length
+      );
+    });
+    
+    return counts;
+  }, [tasks, subjects]);
 
   if (loadingSubjects || !subjects || loadingTasks || !tasks) {
     return (
@@ -33,10 +52,11 @@ export function TasksView() {
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Subjects & Tasks</h1>
+            <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Tasks</h1>
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -55,10 +75,7 @@ export function TasksView() {
             </TooltipProvider>
           </div>
           <p className="text-sm text-muted-foreground">
-            Create and manage your tasks and subjects. These are used by the scheduler to generate your study plan.
-          </p>
-          <p className="text-xs text-muted-foreground/80 mt-1">
-            💡 <strong>Tip:</strong> Start by adding subjects, then create tasks for each subject with deadlines and priorities.
+            Create and manage your tasks. Filter by subject to focus on specific areas.
           </p>
         </div>
         <div className="flex gap-2 flex-wrap sm:flex-nowrap">
@@ -83,53 +100,65 @@ export function TasksView() {
             </TooltipProvider>
           )}
           <NewTaskDialog subjects={subjects} />
-          <NewSubjectDialog />
+          <ManageSubjectsDialog />
         </div>
       </div>
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-[1fr_1.1fr]">
-        <Card className="h-full">
-          <CardHeader className="flex items-center justify-between">
-            <CardTitle>Subjects</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {subjects.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                Add subjects to guide how we balance your workload.
-              </p>
-            )}
-            <div className="space-y-3">
-              <button
-                type="button"
-                className={`w-full p-3 rounded-lg border-2 cursor-pointer transition-all text-left ${
-                  selectedSubjectId === "all" 
-                    ? "border-primary bg-primary/5" 
-                    : "border-border hover:border-primary/50"
-                }`}
-                onClick={() => setSelectedSubjectId("all")}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">All Subjects</span>
-                  <span className="text-xs text-muted-foreground">
-                    {tasks.filter(t => !t.is_completed && !t.is_recurring_template).length} tasks
-                  </span>
-                </div>
-              </button>
-              {subjects.map((subject) => {
-                const taskCount = tasks.filter(t => !t.is_completed && !t.is_recurring_template && t.subject_id === subject.id).length;
-                return (
-                  <SubjectCard 
-                    key={subject.id} 
-                    subject={subject}
-                    taskCount={taskCount}
-                    onClick={() => setSelectedSubjectId(subject.id)}
-                  />
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-        <TaskList tasks={tasks} subjects={subjects} initialSubjectFilter={selectedSubjectId === "all" ? "all" : selectedSubjectId} />
+
+      {/* Subject Filter Tabs */}
+      <div className="flex flex-wrap items-center gap-2 pb-2 border-b">
+        <button
+          type="button"
+          onClick={() => setSelectedSubjectId("all")}
+          className={cn(
+            "inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all",
+            "border-2 hover:bg-muted/50",
+            selectedSubjectId === "all"
+              ? "border-primary bg-primary/10 text-primary"
+              : "border-transparent text-muted-foreground"
+          )}
+        >
+          <span>All</span>
+          <Badge variant="secondary" className="text-xs h-5 px-1.5">
+            {subjectTaskCounts.get("all") || 0}
+          </Badge>
+        </button>
+        {subjects.map((subject) => {
+          const taskCount = subjectTaskCounts.get(subject.id) || 0;
+          const isSelected = selectedSubjectId === subject.id;
+          return (
+            <button
+              key={subject.id}
+              type="button"
+              onClick={() => setSelectedSubjectId(subject.id)}
+              className={cn(
+                "inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all",
+                "border-2 hover:bg-muted/50",
+                isSelected
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-transparent text-muted-foreground"
+              )}
+            >
+              <span
+                className="inline-flex h-2.5 w-2.5 rounded-full shrink-0"
+                style={{ backgroundColor: subject.color }}
+              />
+              <span>{subject.name}</span>
+              {taskCount > 0 && (
+                <Badge variant="secondary" className="text-xs h-5 px-1.5">
+                  {taskCount}
+                </Badge>
+              )}
+            </button>
+          );
+        })}
       </div>
+
+      {/* Full-width Task List */}
+      <TaskList 
+        tasks={tasks} 
+        subjects={subjects} 
+        initialSubjectFilter={selectedSubjectId === "all" ? "all" : selectedSubjectId} 
+      />
     </div>
   );
 }

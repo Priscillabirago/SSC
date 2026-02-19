@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { Calendar, BarChart3, Sparkles, ArrowRight } from "lucide-react";
+import { Calendar, BarChart3, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { OverviewCards } from "@/features/dashboard/components/overview-cards";
@@ -165,19 +165,6 @@ export function DashboardView() {
           todaySessions={analytics.today_plan.length > 0 ? analytics.today_plan : todaySessions}
         />
         <AIInsightsCard />
-      </div>
-
-      {/* Link to Full Analytics */}
-      <div className="flex items-center justify-center pt-4">
-        <Button
-          variant="ghost"
-          onClick={() => router.push("/analytics")}
-          className="gap-2 text-muted-foreground hover:text-foreground"
-        >
-          <BarChart3 className="h-4 w-4" />
-          View Full Analytics
-          <ArrowRight className="h-4 w-4" />
-        </Button>
       </div>
     </div>
   );

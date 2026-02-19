@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { format } from "date-fns";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -22,7 +21,7 @@ import type { Subject, Task, RecurrencePattern } from "@/lib/types";
 import { useCreateTask } from "@/features/tasks/hooks";
 import { toast } from "@/components/ui/use-toast";
 import { RecurrenceSelector } from "./recurrence-selector";
-import { localDateTimeToUTCISO } from "@/lib/utils";
+import { localDateTimeToUTCISO, parseTimeToMinutes } from "@/lib/utils";
 
 const priorities: Task["priority"][] = ["low", "medium", "high", "critical"];
 
@@ -37,7 +36,8 @@ export function NewTaskDialog({ subjects }: NewTaskDialogProps) {
     subject_id: undefined as number | undefined,
     priority: "medium" as Task["priority"],
     estimated_minutes: 60,
-    deadline: format(new Date(Date.now() + 86400000), "yyyy-MM-dd"),
+    estimated_time_display: "1:00", // Display value in hh:mm format
+    deadline: "",
     deadline_time: "",
     description: ""
   });
@@ -108,7 +108,8 @@ export function NewTaskDialog({ subjects }: NewTaskDialogProps) {
             subject_id: undefined,
             priority: "medium",
             estimated_minutes: 60,
-            deadline: format(new Date(Date.now() + 86400000), "yyyy-MM-dd"),
+            estimated_time_display: "1:00",
+            deadline: "",
             deadline_time: "",
             description: ""
           });
@@ -194,18 +195,22 @@ export function NewTaskDialog({ subjects }: NewTaskDialogProps) {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Estimated minutes</Label>
+              <Label>Est. (hh:mm)</Label>
               <Input
-                type="number"
-                min={15}
-                step={15}
-                value={form.estimated_minutes}
-                onChange={(event) =>
+                type="text"
+                inputMode="numeric"
+                placeholder="e.g. 1:00"
+                pattern="[0-9]{1,2}:[0-5][0-9]"
+                value={form.estimated_time_display}
+                onChange={(event) => {
+                  const raw = event.target.value;
+                  const parsed = parseTimeToMinutes(raw);
                   setForm((prev) => ({
                     ...prev,
-                    estimated_minutes: Number(event.target.value)
-                  }))
-                }
+                    estimated_time_display: raw,
+                    estimated_minutes: parsed ?? 60
+                  }));
+                }}
               />
             </div>
             <div className="space-y-2">
@@ -239,6 +244,9 @@ export function NewTaskDialog({ subjects }: NewTaskDialogProps) {
                 value={form.deadline}
                 onChange={(event) => setForm((prev) => ({ ...prev, deadline: event.target.value }))}
               />
+              <p className="text-xs text-muted-foreground">
+                Optional - leave empty for no deadline
+              </p>
               <div className="flex items-center gap-2">
                 <Checkbox
                   id="use-specific-time"

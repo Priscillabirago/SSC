@@ -1,5 +1,5 @@
 import api from "@/lib/api-client";
-import type { StudySession, WeeklyPlan } from "@/lib/types";
+import type { StudySession, StudySessionCreate, WeeklyPlan } from "@/lib/types";
 
 export async function listSessions(): Promise<StudySession[]> {
   const { data } = await api.get<StudySession[]>("/schedule/sessions");
@@ -25,6 +25,7 @@ export async function updateSession(
     notes?: string;
     start_time?: string;
     end_time?: string;
+    is_pinned?: boolean;
   }
 ): Promise<StudySession> {
   const { data } = await api.patch<StudySession>(`/schedule/sessions/${sessionId}`, payload);
@@ -39,6 +40,11 @@ export interface SessionPreparation {
 
 export async function prepareSession(sessionId: number): Promise<SessionPreparation> {
   const { data } = await api.post<SessionPreparation>(`/schedule/sessions/${sessionId}/prepare`);
+  return data;
+}
+
+export async function startSession(sessionId: number): Promise<StudySession> {
+  const { data } = await api.post<StudySession>(`/schedule/sessions/${sessionId}/start`);
   return data;
 }
 
@@ -77,6 +83,7 @@ export interface WorkloadAnalysis {
     unscheduled_task_count?: number;
     daily_distribution?: Record<string, number>;
     imbalance_ratio?: number;
+    window_hours?: number;
   };
 }
 
@@ -88,5 +95,21 @@ export async function getWorkloadAnalysis(): Promise<WorkloadAnalysis> {
 export async function analyzeSchedule(plan: WeeklyPlan): Promise<WorkloadAnalysis> {
   const { data } = await api.post<WorkloadAnalysis>("/schedule/analyze", plan);
   return data;
+}
+
+export async function createSession(payload: StudySessionCreate): Promise<StudySession> {
+  const { data } = await api.post<StudySession>("/schedule/sessions", payload);
+  return data;
+}
+
+export async function pinSession(sessionId: number, isPinned: boolean = true): Promise<StudySession> {
+  const { data } = await api.patch<StudySession>(`/schedule/sessions/${sessionId}`, {
+    is_pinned: isPinned,
+  });
+  return data;
+}
+
+export async function deleteSession(sessionId: number): Promise<void> {
+  await api.delete(`/schedule/sessions/${sessionId}`);
 }
 

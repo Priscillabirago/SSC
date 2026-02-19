@@ -48,13 +48,14 @@ class GeminiCoachAdapter(CoachAdapter):
             return "This is a GENERAL task. Provide productivity tips if relevant, otherwise minimal tips."
     
     def _build_preparation_prompt(
-        self, task_title: str, task_description: str, subject_name: str, 
+        self, task_title: str, task_description: str, task_notes: str, subject_name: str, 
         subject_difficulty: str, duration_minutes: int, time_of_day: str,
         deadline_proximity: str, priority: str, subtasks: list, is_academic: bool,
         task_type_instruction: str
     ) -> str:
         """Build the prompt for session preparation."""
         description_line = f"Description: {task_description}" if task_description else ""
+        notes_line = f"Notes: {task_notes}" if task_notes else ""
         subject_line = f"Subject: {subject_name} ({subject_difficulty} difficulty)" if subject_name else ""
         deadline_line = f"Deadline: {deadline_proximity}" if deadline_proximity else ""
         subtasks_line = f"Subtasks: {', '.join([st.get('title', '') for st in subtasks[:5]])}" if subtasks else ""
@@ -67,6 +68,7 @@ class GeminiCoachAdapter(CoachAdapter):
 
 Task: {task_title}
 {description_line}
+{notes_line}
 {subject_line}
 Duration: {duration_minutes} minutes
 Time: {time_of_day}
@@ -217,6 +219,7 @@ Requirements:
         """Provide research-backed preparation suggestions for a study session."""
         task_title = session_context.get("task_title", "this task")
         task_description = session_context.get("task_description", "")
+        task_notes = session_context.get("task_notes", "")
         subtasks = session_context.get("subtasks", [])
         subject_name = session_context.get("subject_name", "")
         subject_difficulty = session_context.get("subject_difficulty", "")
@@ -228,7 +231,7 @@ Requirements:
         
         task_type_instruction = self._determine_task_type_instruction(is_academic, task_title, task_description)
         prompt = self._build_preparation_prompt(
-            task_title, task_description, subject_name, subject_difficulty,
+            task_title, task_description, task_notes, subject_name, subject_difficulty,
             duration_minutes, time_of_day, deadline_proximity, priority,
             subtasks, is_academic, task_type_instruction
         )

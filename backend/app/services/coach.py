@@ -135,6 +135,7 @@ def build_coach_context(db: Session, user: User) -> dict[str, Any]:
             "priority": task.priority.value if task.priority else "medium",
             "estimated_minutes": task.estimated_minutes if task.estimated_minutes else None,
             "subject": task.subject.name if task.subject else None,
+            "notes": task.notes if task.notes else None,
         }
         for task in active_tasks
     ]

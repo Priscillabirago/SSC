@@ -203,99 +203,101 @@ def coach_reflect(
     )
 
 
-@router.get("/daily-summary", response_model=DailySummaryResponse)
-def get_daily_summary(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
-) -> DailySummaryResponse:
-    """Generate or retrieve automatic end-of-day summary.
-    
-    Returns summary for yesterday (to show in morning before first session)
-    or today (to show after last session ends).
-    Also returns session timing info for frontend to determine when to show.
-    """
+def _get_user_tz(user_timezone: str):
+    """Get ZoneInfo for user's timezone with UTC fallback."""
     from zoneinfo import ZoneInfo
-    
-    # Get current time in user's timezone
     try:
-        tz = ZoneInfo(current_user.timezone)
+        return ZoneInfo(user_timezone)
     except Exception:
-        tz = ZoneInfo("UTC")
-    now_local = datetime.now(tz)
-    now_utc = datetime.now(timezone.utc)
-    today = now_local.date()
-    today_start_local = datetime.combine(today, datetime.min.time()).replace(tzinfo=tz)
-    today_end_local = today_start_local + timedelta(days=1)
-    today_end_utc = today_end_local.astimezone(timezone.utc)
+        return ZoneInfo("UTC")
+
+
+def _ensure_utc(dt: datetime | None) -> datetime | None:
+    """Ensure datetime has UTC timezone."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _is_updated_after(updated_at: datetime | None, reference: datetime) -> bool:
+    """Check if updated_at is after reference time."""
+    if not updated_at:
+        return False
+    updated_utc = _ensure_utc(updated_at)
+    return updated_utc > reference if updated_utc else False
+
+
+def _check_summary_staleness(
+    db: Session,
+    existing_reflection: DailyReflection | None,
+    user_id: int,
+    target_day_start_utc: datetime,
+    target_day_end_utc: datetime,
+) -> bool:
+    """Check if existing summary is stale and needs regeneration."""
+    if not existing_reflection or not existing_reflection.summary:
+        return False
     
-    # Get first upcoming session for today (to determine if we should show yesterday's summary)
-    first_upcoming_session = (
+    reflection_created = _ensure_utc(existing_reflection.created_at)
+    if not reflection_created:
+        return False
+    
+    # Check if any session was updated after summary
+    latest_session = (
         db.query(StudySession)
         .filter(
-            StudySession.user_id == current_user.id,
-            StudySession.start_time >= now_utc,
-            StudySession.start_time < today_end_utc,
-        )
-        .order_by(StudySession.start_time.asc())
-        .first()
-    )
-    first_session_start = first_upcoming_session.start_time.isoformat() if first_upcoming_session else None
-    
-    # Determine which day to summarize
-    # If it's morning and we have a first session, show yesterday's summary
-    # Otherwise, show today's summary (for after last session)
-    if now_local.hour < 12 and first_session_start:
-        target_day = (now_local - timedelta(days=1)).date()
-    else:
-        target_day = today
-    
-    target_day_start_local = datetime.combine(target_day, datetime.min.time()).replace(tzinfo=tz)
-    target_day_end_local = target_day_start_local + timedelta(days=1)
-    target_day_start_utc = target_day_start_local.astimezone(timezone.utc)
-    target_day_end_utc = target_day_end_local.astimezone(timezone.utc)
-    
-    # Get last completed session for target_day (the day we're summarizing)
-    last_completed_session = (
-        db.query(StudySession)
-        .filter(
-            StudySession.user_id == current_user.id,
+            StudySession.user_id == user_id,
             StudySession.status.in_([SessionStatus.COMPLETED, SessionStatus.PARTIAL]),
             StudySession.start_time >= target_day_start_utc,
             StudySession.start_time < target_day_end_utc,
         )
-        .order_by(StudySession.end_time.desc())
+        .order_by(StudySession.updated_at.desc())
         .first()
     )
-    last_session_end = last_completed_session.end_time.isoformat() if last_completed_session and last_completed_session.end_time else None
+    if latest_session and _is_updated_after(latest_session.updated_at, reflection_created):
+        return True
     
-    # Check if we already have an auto-generated summary for target day
-    existing_reflection = (
-        db.query(DailyReflection)
+    # Check if "slow start" summary is outdated
+    completed_count = (
+        db.query(StudySession)
         .filter(
-            DailyReflection.user_id == current_user.id,
-            DailyReflection.day == target_day,
-            DailyReflection.worked.is_(None),  # Auto-generated if worked is null
-            DailyReflection.challenging.is_(None)  # Auto-generated if challenging is null
+            StudySession.user_id == user_id,
+            StudySession.status.in_([SessionStatus.COMPLETED, SessionStatus.PARTIAL]),
+            StudySession.start_time >= target_day_start_utc,
+            StudySession.start_time < target_day_end_utc,
         )
+        .count()
+    )
+    if completed_count > 0 and "slow" in (existing_reflection.summary or "").lower():
+        return True
+    
+    # Check if tasks changed
+    latest_task = (
+        db.query(Task)
+        .filter(Task.user_id == user_id)
+        .order_by(Task.updated_at.desc())
         .first()
     )
+    if latest_task and _is_updated_after(latest_task.updated_at, reflection_created):
+        return True
     
-    if existing_reflection and existing_reflection.summary:
-        # Return existing summary with session timing
-        return DailySummaryResponse(
-            summary=existing_reflection.summary,
-            tomorrow_tip=existing_reflection.suggestion or "",
-            tone="positive",
-            last_session_end=last_session_end,
-            first_session_start=first_session_start,
-            user_timezone=current_user.timezone or "UTC"
-        )
-    
-    # Build daily context for target day
+    return False
+
+
+def _build_daily_summary_context(
+    db: Session,
+    user_id: int,
+    target_day,
+    target_day_start_utc: datetime,
+    target_day_end_utc: datetime,
+) -> dict:
+    """Build context for AI summary generation."""
     completed_sessions = (
         db.query(StudySession)
         .filter(
-            StudySession.user_id == current_user.id,
+            StudySession.user_id == user_id,
             StudySession.status.in_([SessionStatus.COMPLETED, SessionStatus.PARTIAL]),
             StudySession.start_time >= target_day_start_utc,
             StudySession.start_time < target_day_end_utc,
@@ -306,7 +308,7 @@ def get_daily_summary(
     completed_tasks = (
         db.query(Task)
         .filter(
-            Task.user_id == current_user.id,
+            Task.user_id == user_id,
             Task.is_completed.is_(True),
             Task.completed_at >= target_day_start_utc,
             Task.completed_at < target_day_end_utc,
@@ -314,48 +316,138 @@ def get_daily_summary(
         .all()
     )
     
-    # Calculate total minutes
     total_minutes = sum(
-        int((session.end_time - session.start_time).total_seconds() // 60)
-        for session in completed_sessions
+        int((s.end_time - s.start_time).total_seconds() // 60)
+        for s in completed_sessions
     )
     
-    # Get target day's energy
-    energy_target_day = (
+    energy_record = (
         db.query(DailyEnergy)
-        .filter(DailyEnergy.user_id == current_user.id, DailyEnergy.day == target_day)
+        .filter(DailyEnergy.user_id == user_id, DailyEnergy.day == target_day)
         .first()
     )
-    energy_level = energy_target_day.level if energy_target_day else "medium"
+    energy_level = energy_record.level if energy_record else "medium"
     
-    # Get tasks due the day after target day
-    next_day_start_local = target_day_end_local
-    next_day_end_local = next_day_start_local + timedelta(days=1)
-    next_day_start_utc = next_day_start_local.astimezone(timezone.utc)
-    next_day_end_utc = next_day_end_local.astimezone(timezone.utc)
-    
+    # Get tasks due next day
+    next_day_start = target_day_end_utc
+    next_day_end = next_day_start + timedelta(days=1)
     tasks_next_day = (
         db.query(Task)
         .filter(
-            Task.user_id == current_user.id,
+            Task.user_id == user_id,
             Task.is_completed.is_(False),
             Task.deadline.isnot(None),
-            Task.deadline >= next_day_start_utc,
-            Task.deadline < next_day_end_utc,
+            Task.deadline >= next_day_start,
+            Task.deadline < next_day_end,
         )
         .all()
     )
     
-    # Build daily context
-    daily_context = {
+    return {
         "completed_sessions": completed_sessions,
         "completed_tasks": completed_tasks,
         "total_minutes": total_minutes,
         "energy_level": energy_level,
         "tasks_tomorrow": tasks_next_day,
     }
+
+
+@router.get("/daily-summary", response_model=DailySummaryResponse)
+def get_daily_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> DailySummaryResponse:
+    """Generate or retrieve automatic end-of-day summary."""
+    tz = _get_user_tz(current_user.timezone)
+    now_local = datetime.now(tz)
+    now_utc = datetime.now(timezone.utc)
+    today = now_local.date()
+    today_end_utc = (datetime.combine(today, datetime.min.time()).replace(tzinfo=tz) + timedelta(days=1)).astimezone(timezone.utc)
     
-    # Generate summary using AI
+    # Get first upcoming PLANNED session and count remaining
+    first_upcoming = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.start_time >= now_utc,
+            StudySession.start_time < today_end_utc,
+            StudySession.status == SessionStatus.PLANNED,
+        )
+        .order_by(StudySession.start_time.asc())
+        .first()
+    )
+    first_session_start = first_upcoming.start_time.isoformat() if first_upcoming else None
+    
+    has_remaining_sessions = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.start_time >= now_utc,
+            StudySession.start_time < today_end_utc,
+            StudySession.status == SessionStatus.PLANNED,
+        )
+        .count()
+    ) > 0
+    
+    # Determine target day (yesterday if morning, today otherwise)
+    target_day = (now_local - timedelta(days=1)).date() if (now_local.hour < 12 and first_session_start) else today
+    target_day_start_local = datetime.combine(target_day, datetime.min.time()).replace(tzinfo=tz)
+    target_day_end_local = target_day_start_local + timedelta(days=1)
+    target_day_start_utc = target_day_start_local.astimezone(timezone.utc)
+    target_day_end_utc = target_day_end_local.astimezone(timezone.utc)
+    
+    # Get last completed session
+    last_completed = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.status.in_([SessionStatus.COMPLETED, SessionStatus.PARTIAL]),
+            StudySession.start_time >= target_day_start_utc,
+            StudySession.start_time < target_day_end_utc,
+        )
+        .order_by(StudySession.end_time.desc())
+        .first()
+    )
+    last_session_end = last_completed.end_time.isoformat() if last_completed and last_completed.end_time else None
+    
+    # Check for existing auto-generated summary
+    existing_reflection = (
+        db.query(DailyReflection)
+        .filter(
+            DailyReflection.user_id == current_user.id,
+            DailyReflection.day == target_day,
+            DailyReflection.worked.is_(None),
+            DailyReflection.challenging.is_(None),
+        )
+        .first()
+    )
+    
+    summary_is_stale = _check_summary_staleness(
+        db, existing_reflection, current_user.id, target_day_start_utc, target_day_end_utc
+    )
+    
+    # Return existing if valid
+    if existing_reflection and existing_reflection.summary and not summary_is_stale:
+        return DailySummaryResponse(
+            summary=existing_reflection.summary,
+            tomorrow_tip=existing_reflection.suggestion or "",
+            tone="positive",
+            last_session_end=last_session_end,
+            first_session_start=first_session_start,
+            has_remaining_sessions=has_remaining_sessions,
+            user_timezone=current_user.timezone or "UTC",
+        )
+    
+    # Delete stale summary
+    if existing_reflection and summary_is_stale:
+        db.delete(existing_reflection)
+        db.flush()
+    
+    # Build context and generate new summary
+    daily_context = _build_daily_summary_context(
+        db, current_user.id, target_day, target_day_start_utc, target_day_end_utc
+    )
+    
     adapter = get_coach_adapter()
     user_context = coach_service.build_coach_context(db, current_user)
     ai_response = adapter.generate_daily_summary(current_user, daily_context, user_context)
@@ -364,13 +456,12 @@ def get_daily_summary(
     tomorrow_tip = ai_response.get("tomorrow_tip", "")
     tone = ai_response.get("tone", "positive")
     
-    # Store in DailyReflection (with worked/challenging as None to indicate auto-generated)
     coach_service.record_reflection(
         db,
         user_id=current_user.id,
         day=target_day,
-        worked=None,  # None indicates auto-generated
-        challenging=None,  # None indicates auto-generated
+        worked=None,
+        challenging=None,
         summary=summary,
         suggestion=tomorrow_tip,
     )
@@ -381,7 +472,8 @@ def get_daily_summary(
         tone=tone,
         last_session_end=last_session_end,
         first_session_start=first_session_start,
-        user_timezone=current_user.timezone or "UTC"
+        has_remaining_sessions=has_remaining_sessions,
+        user_timezone=current_user.timezone or "UTC",
     )
 
 

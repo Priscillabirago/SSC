@@ -209,6 +209,20 @@ def calculate_weights(
         if task.is_recurring_template:
             continue
         
+        # For recurring task instances, only schedule if deadline is within 10 days
+        # This prevents far-off recurring tasks from filling empty schedule slots
+        if task.recurring_template_id and task.deadline:
+            # Make both UTC-aware for comparison
+            deadline = task.deadline
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+            ref_aware = reference if reference.tzinfo else reference.replace(tzinfo=timezone.utc)
+            
+            days_until_deadline = (deadline - ref_aware).total_seconds() / 86400
+            # Skip if deadline is more than 10 days away
+            if days_until_deadline > 10:
+                continue
+        
         subject = subject_map.get(task.subject_id)
         weight = PRIORITY_WEIGHT[task.priority]
         
@@ -234,8 +248,14 @@ def calculate_weights(
         remaining_minutes = max(0, task.estimated_minutes - total_spent)
         
         # Skip tasks with no remaining work
+        # Exception: CRITICAL tasks with some work (even if estimate seems low) should still be scheduled
         if remaining_minutes <= 0:
-            continue
+            # For critical tasks, if estimate was recently changed and is now <= spent time,
+            # still include it with minimum remaining work to ensure it gets scheduled
+            if task.priority == TaskPriority.CRITICAL and task.estimated_minutes > 0:
+                remaining_minutes = max(1, task.estimated_minutes // 10)  # At least 10% of estimate or 1 minute
+            else:
+                continue
         
         weighted_tasks.append(
             WeightedTask(
@@ -364,36 +384,102 @@ def _extract_constraints_for_day(
 
 
 def apply_constraints(
-    blocks: list[tuple[datetime, datetime]], constraints: list[ScheduleConstraint]
+    blocks: list[tuple[datetime, datetime]], constraints: list[ScheduleConstraint], user_tz: ZoneInfo | None = None
 ) -> list[tuple[datetime, datetime]]:
     if not constraints:
         return blocks
 
-    def overlaps(
-        block_start: datetime,
-        block_end: datetime,
-        constraint: ScheduleConstraint,
-    ) -> bool:
+    def get_constraint_range(constraint: ScheduleConstraint, block_start: datetime) -> tuple[datetime, datetime] | None:
+        """Get the constraint time range in naive UTC for comparison with blocks."""
         if constraint.start_datetime and constraint.end_datetime:
-            return not (block_end <= constraint.start_datetime or block_start >= constraint.end_datetime)
-        if constraint.start_time and constraint.end_time:
-            c_start = block_start.replace(
-                hour=constraint.start_time.hour, minute=constraint.start_time.minute
-            )
-            c_end = block_start.replace(
-                hour=constraint.end_time.hour, minute=constraint.end_time.minute
-            )
-            if c_end <= c_start:
-                c_end += timedelta(days=1)
-            return not (block_end <= c_start or block_start >= c_end)
-        return False
+            # Normalize constraint datetimes to naive UTC for comparison with blocks
+            c_start = constraint.start_datetime
+            c_end = constraint.end_datetime
+            
+            # If timezone-aware, convert to UTC then make naive
+            # If already naive, assume it's UTC (as stored in database)
+            if c_start.tzinfo is not None:
+                c_start = c_start.astimezone(timezone.utc).replace(tzinfo=None)
+            if c_end.tzinfo is not None:
+                c_end = c_end.astimezone(timezone.utc).replace(tzinfo=None)
+            
+            return (c_start, c_end)
+        elif constraint.start_time and constraint.end_time:
+            # For recurring constraints, start_time/end_time are in user's local timezone
+            if not user_tz:
+                # Fallback: assume UTC (shouldn't happen in normal flow)
+                c_start = block_start.replace(
+                    hour=constraint.start_time.hour, minute=constraint.start_time.minute
+                )
+                c_end = block_start.replace(
+                    hour=constraint.end_time.hour, minute=constraint.end_time.minute
+                )
+            else:
+                # Convert block_start (naive UTC) to user's local timezone
+                block_start_utc = block_start.replace(tzinfo=timezone.utc)
+                block_start_local = block_start_utc.astimezone(user_tz)
+                
+                # Apply constraint times in local timezone
+                c_start_local = block_start_local.replace(
+                    hour=constraint.start_time.hour, 
+                    minute=constraint.start_time.minute,
+                    second=0,
+                    microsecond=0
+                )
+                c_end_local = block_start_local.replace(
+                    hour=constraint.end_time.hour,
+                    minute=constraint.end_time.minute,
+                    second=0,
+                    microsecond=0
+                )
+                
+                # Handle end time wrapping to next day
+                if c_end_local <= c_start_local:
+                    c_end_local += timedelta(days=1)
+                
+                # Convert back to UTC (naive) for comparison
+                c_start = c_start_local.astimezone(timezone.utc).replace(tzinfo=None)
+                c_end = c_end_local.astimezone(timezone.utc).replace(tzinfo=None)
+            
+            return (c_start, c_end)
+        return None
 
-    filtered: list[tuple[datetime, datetime]] = []
+    # Split blocks around constraints instead of just filtering them out
+    result: list[tuple[datetime, datetime]] = []
+    
     for block_start, block_end in blocks:
-        conflict = any(overlaps(block_start, block_end, constraint) for constraint in constraints)
-        if not conflict:
-            filtered.append((block_start, block_end))
-    return filtered
+        # Collect all constraint ranges that overlap with this block
+        constraint_ranges: list[tuple[datetime, datetime]] = []
+        for constraint in constraints:
+            constraint_range = get_constraint_range(constraint, block_start)
+            if constraint_range:
+                c_start, c_end = constraint_range
+                # Check if constraint overlaps with block
+                if not (block_end <= c_start or block_start >= c_end):
+                    constraint_ranges.append((c_start, c_end))
+        
+        if not constraint_ranges:
+            # No constraints overlap with this block, keep it as-is
+            result.append((block_start, block_end))
+            continue
+        
+        # Sort constraint ranges by start time
+        constraint_ranges.sort(key=lambda x: x[0])
+        
+        # Split the block around constraints
+        current_start = block_start
+        for c_start, c_end in constraint_ranges:
+            # If there's space before the constraint, add it
+            if current_start < c_start:
+                result.append((current_start, c_start))
+            # Move current_start to after the constraint
+            current_start = max(current_start, c_end)
+        
+        # If there's space after the last constraint, add it
+        if current_start < block_end:
+            result.append((current_start, block_end))
+    
+    return result
 
 
 def insert_breaks(
@@ -493,7 +579,10 @@ def _process_task_in_window(
     
     # Check if task has very little remaining time - if so, remove it
     # This should happen BEFORE calculating session_length
-    if current_task.remaining_minutes <= 10:
+    # Exception: CRITICAL tasks should be scheduled even with minimal remaining work
+    is_critical = current_task.task.priority == TaskPriority.CRITICAL
+    min_threshold = 1 if is_critical else 10
+    if current_task.remaining_minutes <= min_threshold:
         tasks.pop(0)
         return None, pointer
     
@@ -542,20 +631,38 @@ def _normalize_current_time(current_time: datetime | None) -> datetime | None:
 
 
 def _calculate_window_pointer(
-    window_start: datetime, window_end: datetime, current_time: datetime | None
+    window_start: datetime, window_end: datetime, current_time: datetime | None, user_tz: ZoneInfo | None = None
 ) -> datetime | None:
-    """Calculate the starting pointer for a window, accounting for current time if window is today."""
+    """Calculate the starting pointer for a window, accounting for current time if window is today.
+    
+    Args:
+        window_start: Window start (naive UTC datetime representing local time)
+        window_end: Window end (naive UTC datetime representing local time)
+        current_time: Current time (UTC-aware datetime)
+        user_tz: User's timezone for proper local date comparison
+    """
     pointer = window_start
-    if not current_time:
+    if not current_time or not user_tz:
+        if pointer >= window_end:
+            return None
         return pointer
     
-    window_start_aware = window_start.replace(tzinfo=timezone.utc) if window_start.tzinfo is None else window_start.astimezone(timezone.utc)
-    window_date = window_start_aware.date()
-    current_date = current_time.date()
+    # Convert both to user's local timezone for date comparison
+    window_start_utc = window_start.replace(tzinfo=timezone.utc)
+    window_start_local = window_start_utc.astimezone(user_tz)
+    window_date_local = window_start_local.date()
     
-    if window_date == current_date:
-        current_time_naive = current_time.replace(tzinfo=None) if current_time.tzinfo else current_time
-        pointer = max(window_start, current_time_naive)
+    current_time_utc = current_time if current_time.tzinfo else current_time.replace(tzinfo=timezone.utc)
+    current_time_local = current_time_utc.astimezone(user_tz)
+    current_date_local = current_time_local.date()
+    
+    # If window is today in user's local timezone, start from current time (not past)
+    if window_date_local == current_date_local:
+        # Compare times in local timezone
+        if current_time_local >= window_start_local:
+            # Current time is at or past window start - use current time
+            pointer = current_time_utc.replace(tzinfo=None)
+        # Otherwise use window_start (already set)
     
     if pointer >= window_end:
         return None
@@ -585,13 +692,19 @@ def _allocate_sessions_for_day(
     session_cap = timedelta(minutes=_energy_cap(energy_level, user.max_session_length))
     current_time = _normalize_current_time(current_time)
     
+    # Get user timezone for proper date comparison
+    try:
+        user_tz = ZoneInfo(user.timezone)
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+    
     # Build task priority map for interleaving (to respect CRITICAL priority)
     task_priorities: dict[int, str] = {
         wt.task.id: wt.task.priority.value for wt in tasks
     }
 
     for window_start, window_end in windows:
-        pointer = _calculate_window_pointer(window_start, window_end, current_time)
+        pointer = _calculate_window_pointer(window_start, window_end, current_time, user_tz)
         if pointer is None:
             continue
             
@@ -676,7 +789,7 @@ def build_weekly_plan(
             continue
 
         effective_constraints = _extract_constraints_for_day(constraints, day_date_local, user_tz)
-        available_blocks = apply_constraints(window_ranges, effective_constraints)
+        available_blocks = apply_constraints(window_ranges, effective_constraints, user_tz)
         
         # Sort tasks so those with deadlines on/before this day come first
         # This ensures urgent tasks get scheduled before their deadlines
@@ -707,19 +820,34 @@ def _normalize_to_utc_aware(dt: datetime) -> datetime:
 
 
 def _calculate_new_deadline(
-    deadline: datetime, today_start: datetime, tomorrow_start: datetime, ref: datetime
+    deadline: datetime, today_start_local: datetime, tomorrow_start_local: datetime, ref_local: datetime, user_tz: ZoneInfo
 ) -> datetime:
-    """Calculate new deadline for rescheduling (today or tomorrow)."""
-    new_deadline = today_start.replace(hour=23, minute=59)
-    if ref.hour >= 20:
-        new_deadline = tomorrow_start.replace(hour=23, minute=59)
+    """Calculate new deadline for rescheduling (today or tomorrow).
     
-    if deadline.hour != 23 or deadline.minute != 59:
-        new_deadline = new_deadline.replace(
-            hour=min(deadline.hour, 23),
-            minute=min(deadline.minute, 59)
+    Uses local time to determine if it's late in the day (>= 8 PM local).
+    Args:
+        today_start_local: Start of today in user's local timezone (timezone-aware)
+        tomorrow_start_local: Start of tomorrow in user's local timezone (timezone-aware)
+    """
+    # Determine which day (today or tomorrow) based on local time
+    base_date_local = today_start_local
+    if ref_local.hour >= 20:
+        base_date_local = tomorrow_start_local
+    
+    # Set to end of day in local timezone
+    new_deadline_local = base_date_local.replace(hour=23, minute=59, second=0, microsecond=0)
+    
+    # Preserve original deadline time if it wasn't end-of-day
+    deadline_local = deadline.astimezone(user_tz) if deadline.tzinfo else deadline.replace(tzinfo=timezone.utc).astimezone(user_tz)
+    if deadline_local.hour != 23 or deadline_local.minute != 59:
+        new_deadline_local = new_deadline_local.replace(
+            hour=min(deadline_local.hour, 23),
+            minute=min(deadline_local.minute, 59)
         )
-    return new_deadline
+    
+    # Convert back to UTC and return as naive (for database storage)
+    new_deadline_utc = new_deadline_local.astimezone(timezone.utc)
+    return new_deadline_utc.replace(tzinfo=None)
 
 
 def _escalate_priority(task: Task) -> None:
@@ -735,13 +863,26 @@ def _escalate_priority(task: Task) -> None:
 
 
 def _build_reschedule_summary(
-    rescheduled_tasks: list[dict[str, Any]], needs_attention_tasks: list[dict[str, Any]], today: date
+    rescheduled_tasks: list[dict[str, Any]], needs_attention_tasks: list[dict[str, Any]], today_local: date, user_tz: ZoneInfo | None = None
 ) -> str | None:
-    """Build human-readable summary of rescheduling actions."""
+    """Build human-readable summary of rescheduling actions.
+    
+    Args:
+        today_local: Today's date in user's local timezone
+        user_tz: User's timezone for date conversion
+    """
     summary_parts = []
     
     if rescheduled_tasks:
-        today_count = sum(1 for t in rescheduled_tasks if t["new_deadline"].date() == today)
+        if user_tz:
+            # Convert new_deadline (naive UTC) to local timezone to get local date
+            today_count = sum(
+                1 for t in rescheduled_tasks 
+                if t["new_deadline"].replace(tzinfo=timezone.utc).astimezone(user_tz).date() == today_local
+            )
+        else:
+            # Fallback: compare UTC dates (less accurate but works)
+            today_count = sum(1 for t in rescheduled_tasks if t["new_deadline"].date() == today_local)
         tomorrow_count = len(rescheduled_tasks) - today_count
         task_word = "task" if len(rescheduled_tasks) == 1 else "tasks"
         
@@ -770,16 +911,27 @@ def _auto_reschedule_overdue_tasks(
     """
     Automatically reschedule overdue tasks to today or tomorrow.
     
+    Uses user's local timezone for date comparisons to ensure accuracy.
+    
     Returns:
         dict with keys:
         - rescheduled: list of dicts with task info and new deadline
         - needs_attention: list of very overdue tasks (> 14 days)
         - summary: human-readable summary string
     """
+    from zoneinfo import ZoneInfo
+    
     ref = _normalize_to_utc_aware(reference)
-    today = ref.date()
-    today_start = datetime.combine(today, time.min, tzinfo=timezone.utc)
-    tomorrow_start = today_start + timedelta(days=1)
+    try:
+        user_tz = ZoneInfo(user.timezone) if user.timezone else ZoneInfo("UTC")
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+    
+    # Get today in user's local timezone (not UTC!)
+    ref_local = ref.astimezone(user_tz)
+    today_local = ref_local.date()
+    today_start_local = datetime.combine(today_local, time.min, tzinfo=user_tz)
+    tomorrow_start_local = today_start_local + timedelta(days=1)
     
     all_tasks = db.query(Task).filter(
         Task.user_id == user.id,
@@ -795,37 +947,46 @@ def _auto_reschedule_overdue_tasks(
         if not task.deadline:
             continue
         
-        deadline = _normalize_to_utc_aware(task.deadline)
-        days_overdue = (today - deadline.date()).days
-        
-        if days_overdue <= 0:
-            continue
-        
-        if days_overdue > 14:
-            needs_attention_tasks.append({
-                "task_id": task.id,
-                "title": task.title,
-                "days_overdue": days_overdue,
-                "original_deadline": deadline,
-            })
-        elif days_overdue <= 7:
-            new_deadline = _calculate_new_deadline(deadline, today_start, tomorrow_start, ref)
-            task.deadline = new_deadline
-            _escalate_priority(task)
+        try:
+            deadline_utc = _normalize_to_utc_aware(task.deadline)
+            deadline_local = deadline_utc.astimezone(user_tz)
+            deadline_date_local = deadline_local.date()
             
-            rescheduled_tasks.append({
-                "task_id": task.id,
-                "title": task.title,
-                "days_overdue": days_overdue,
-                "original_deadline": deadline,
-                "new_deadline": new_deadline,
-                "new_priority": task.priority.value,
-            })
+            # Compare dates in user's local timezone
+            days_overdue = (today_local - deadline_date_local).days
+            
+            if days_overdue <= 0:
+                continue
+            
+            if days_overdue > 14:
+                needs_attention_tasks.append({
+                    "task_id": task.id,
+                    "title": task.title,
+                    "days_overdue": days_overdue,
+                    "original_deadline": deadline_utc,
+                })
+            elif days_overdue <= 7:
+                new_deadline = _calculate_new_deadline(deadline_utc, today_start_local, tomorrow_start_local, ref_local, user_tz)
+                task.deadline = new_deadline
+                _escalate_priority(task)
+                
+                rescheduled_tasks.append({
+                    "task_id": task.id,
+                    "title": task.title,
+                    "days_overdue": days_overdue,
+                    "original_deadline": deadline_utc,
+                    "new_deadline": new_deadline,
+                    "new_priority": task.priority.value,
+                })
+        except Exception:
+            # Skip tasks with invalid deadlines rather than crashing
+            continue
     
     if rescheduled_tasks:
         db.commit()
     
-    summary = _build_reschedule_summary(rescheduled_tasks, needs_attention_tasks, today)
+    # Use local date for summary (matching the date comparison logic above)
+    summary = _build_reschedule_summary(rescheduled_tasks, needs_attention_tasks, today_local, user_tz)
     
     return {
         "rescheduled": rescheduled_tasks,

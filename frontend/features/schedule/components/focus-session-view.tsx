@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { X, Pause, Play, Square, Plus, SkipForward, ChevronDown, ChevronUp, Clock, Timer, Sparkles, AlertTriangle, Moon, Sun, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -217,6 +217,16 @@ export function FocusSessionView() {
           });
           onComplete?.();
         },
+        onError: (error) => {
+          console.error("Failed to update task timer:", error);
+          toast({
+            variant: "destructive",
+            title: "Failed to save time",
+            description: "Time tracked locally, but may not have been saved.",
+          });
+          // Still call onComplete to stop session and navigate even if save fails
+          onComplete?.();
+        },
       }
     );
   }, [state.task, tasks, updateTask]);
@@ -226,13 +236,17 @@ export function FocusSessionView() {
     if (!state.task) {
       stopSession();
       setShowStopConfirm(false);
+      router.push("/schedule");
       return;
     }
     updateTaskTimer(state.task.id, elapsedMinutes, "Session stopped", () => {
-      stopSession();
       setShowStopConfirm(false);
+      // Stop session first, then navigate
+      stopSession();
+      // Immediate navigation - the component will return null when isActive becomes false
+      router.push("/schedule");
     });
-  }, [state.task, updateTaskTimer, stopSession]);
+  }, [state.task, updateTaskTimer, stopSession, router]);
 
   // Helper: Stop scheduled session (session.id > 0)
   // NOTE: Scheduled sessions should NOT add to timer_minutes_spent
@@ -243,6 +257,7 @@ export function FocusSessionView() {
     if (!state.session || state.session.id <= 0) {
       stopSession();
       setShowStopConfirm(false);
+      router.push("/schedule");
       return;
     }
     // Update end_time to current time so backend calculates actual time worked, not full scheduled duration
@@ -275,12 +290,27 @@ export function FocusSessionView() {
             title: "Session stopped",
             description: `Marked as partial - ${elapsedMinutes} minute${elapsedMinutes === 1 ? "" : "s"} worked.`,
           });
-          stopSession();
           setShowStopConfirm(false);
+          // Stop session first, then navigate
+          stopSession();
+          // Immediate navigation - the component will return null when isActive becomes false
+          router.push("/schedule");
+        },
+        onError: (error) => {
+          // Even if mutation fails, stop the session locally and navigate
+          console.error("Failed to update session:", error);
+          toast({
+            variant: "destructive",
+            title: "Failed to update session",
+            description: "Session stopped locally, but update may not have been saved.",
+          });
+          setShowStopConfirm(false);
+          stopSession();
+          router.push("/schedule");
         },
       }
     );
-  }, [state.session, state.startTime, updateSession, stopSession]);
+  }, [state.session, state.startTime, updateSession, stopSession, router]);
 
   // Helper: Complete scheduled session
   // NOTE: Scheduled sessions should NOT add to timer_minutes_spent
@@ -288,6 +318,7 @@ export function FocusSessionView() {
   const completeScheduledSession = useCallback((elapsedMinutes: number) => {
     if (!state.session || state.session.id <= 0) {
       stopSession();
+      router.push("/schedule");
       return;
     }
     updateSession.mutate(
@@ -296,6 +327,16 @@ export function FocusSessionView() {
         payload: { status: "completed" },
       },
       {
+        onError: (error) => {
+          console.error("Failed to complete session:", error);
+          toast({
+            variant: "destructive",
+            title: "Failed to update session",
+            description: "Session stopped locally, but update may not have been saved.",
+          });
+          stopSession();
+          router.push("/schedule");
+        },
         onSuccess: () => {
           // Backend will automatically update actual_minutes_spent from session duration
           // We should NOT add to timer_minutes_spent for scheduled sessions
@@ -303,11 +344,14 @@ export function FocusSessionView() {
             title: "Session completed! 🎉",
             description: "Great work! Your session has been marked as complete.",
           });
+          // Stop session first, then navigate
           stopSession();
+          // Immediate navigation - the component will return null when isActive becomes false
+          router.push("/schedule");
         },
       }
     );
-  }, [state.session, updateSession, stopSession]);
+  }, [state.session, updateSession, stopSession, router]);
 
   // Fetch encouragement messages periodically
   useEffect(() => {
@@ -396,6 +440,7 @@ export function FocusSessionView() {
     if (!state.session) {
       stopSession();
       setShowStopConfirm(false);
+      router.push("/schedule");
       return;
     }
 
@@ -416,8 +461,9 @@ export function FocusSessionView() {
     } else {
       stopSession();
       setShowStopConfirm(false);
+      router.push("/schedule");
     }
-  }, [showStopConfirm, state.session, state.startTime, state.isPaused, state.pausedTime, stopAdHocSession, stopScheduledSession, stopSession]);
+  }, [showStopConfirm, state.session, state.startTime, state.isPaused, state.pausedTime, stopAdHocSession, stopScheduledSession, stopSession, router]);
 
   // Handle ESC key to exit
   useEffect(() => {
@@ -471,6 +517,7 @@ export function FocusSessionView() {
   const handleSkip = useCallback(() => {
     if (!state.session) {
       skipSession();
+      router.push("/schedule");
       return;
     }
     updateSession.mutate(
@@ -484,11 +531,25 @@ export function FocusSessionView() {
             title: "Session skipped",
             description: "This session has been marked as skipped.",
           });
+          // Skip session first, then navigate
           skipSession();
+          // Immediate navigation - the component will return null when isActive becomes false
+          router.push("/schedule");
+        },
+        onError: (error) => {
+          // Even if mutation fails, stop the session locally and navigate
+          console.error("Failed to skip session:", error);
+          toast({
+            variant: "destructive",
+            title: "Failed to update session",
+            description: "Session stopped locally, but update may not have been saved.",
+          });
+          skipSession();
+          router.push("/schedule");
         },
       }
     );
-  }, [state.session, updateSession, skipSession]);
+  }, [state.session, updateSession, skipSession, router]);
 
   // Handle extend
   const handleExtend = useCallback((minutes: number) => {
@@ -604,6 +665,23 @@ export function FocusSessionView() {
       setTaskDescriptionDraft(task.description || "");
     }
   }, [task?.id]);
+
+  // REMOVED: useEffect that was redirecting to /schedule on every page load
+  // This was causing navigation to "blink" - it would try to navigate but then
+  // immediately redirect back to /schedule because FocusSessionView is rendered
+  // in AppShell (all pages), and the default state is !isActive && session === null
+  // The callbacks (stopAdHocSession, stopScheduledSession, etc.) already handle
+  // navigation when sessions end, so this backup navigation was unnecessary and harmful
+
+  // Early return - component should not render when inactive
+  // This check happens BEFORE any rendering, so the overlay won't show
+  // Clear navigation warning if session becomes inactive
+  useEffect(() => {
+    if (!state.isActive) {
+      setShowNavigationWarning(false);
+      setPendingNavigation(null);
+    }
+  }, [state.isActive]);
 
   if (!state.isActive || !state.session) {
     return null;
@@ -847,11 +925,6 @@ export function FocusSessionView() {
                                 {subtask.title}
                               </button>
                             )}
-                            {subtask.estimated_minutes ? (
-                              <span className="text-muted-foreground flex-shrink-0">
-                                {subtask.estimated_minutes}m
-                              </span>
-                            ) : null}
                           </div>
                         ))}
                       </div>

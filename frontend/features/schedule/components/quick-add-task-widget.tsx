@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { format } from "date-fns";
 import { Plus, X, Zap } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -21,7 +20,7 @@ import { useCreateTask } from "@/features/tasks/hooks";
 import { useSubjects } from "@/features/subjects/hooks";
 import { toast } from "@/components/ui/use-toast";
 import { useGenerateSchedule } from "@/features/schedule/hooks";
-import { localDateTimeToUTCISO } from "@/lib/utils";
+import { localDateTimeToUTCISO, parseTimeToMinutes } from "@/lib/utils";
 
 const priorities: Task["priority"][] = ["low", "medium", "high", "critical"];
 
@@ -37,7 +36,7 @@ export function QuickAddTaskWidget() {
     priority: "high" as Task["priority"], // Default to high for urgent tasks
     status: "todo" as Task["status"],
     estimated_minutes: 60,
-    deadline: format(new Date(Date.now() + 86400000), "yyyy-MM-dd"), // Tomorrow by default
+    deadline: "", // Empty by default - no deadline
     deadlineTime: "",
     useDeadlineTime: false,
   });
@@ -100,7 +99,7 @@ export function QuickAddTaskWidget() {
             priority: "high",
             status: "todo",
             estimated_minutes: 60,
-            deadline: format(new Date(Date.now() + 86400000), "yyyy-MM-dd"),
+            deadline: "",
             deadlineTime: "",
             useDeadlineTime: false,
           });
@@ -166,7 +165,7 @@ export function QuickAddTaskWidget() {
                 priority: "high",
                 status: "todo",
                 estimated_minutes: 60,
-                deadline: format(new Date(Date.now() + 86400000), "yyyy-MM-dd"),
+                deadline: "",
                 deadlineTime: "",
                 useDeadlineTime: false,
               });
@@ -263,15 +262,28 @@ export function QuickAddTaskWidget() {
 
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <Label htmlFor="quick-minutes" className="text-xs">Est. (min)</Label>
+              <Label htmlFor="quick-minutes" className="text-xs">Est. (hh:mm)</Label>
               <Input
                 id="quick-minutes"
-                type="number"
-                min={15}
-                step={15}
+                type="text"
+                inputMode="numeric"
+                placeholder="e.g. 1:00"
+                pattern="[0-9]{1,2}:[0-5][0-9]"
                 className="h-8 text-xs"
-                value={form.estimated_minutes}
-                onChange={(e) => setForm((f) => ({ ...f, estimated_minutes: Number(e.target.value) }))}
+                value={
+                  (() => {
+                    const minutes = form.estimated_minutes;
+                    if (minutes == null || Number.isNaN(minutes)) return "";
+                    const hours = Math.floor(minutes / 60);
+                    const mins = minutes % 60;
+                    if (hours === 0) return `${mins}`;
+                    return `${hours}:${String(mins).padStart(2, "0")}`;
+                  })()
+                }
+                onChange={(e) => {
+                  const parsed = parseTimeToMinutes(e.target.value);
+                  setForm((f) => ({ ...f, estimated_minutes: parsed ?? 0 }));
+                }}
               />
             </div>
             
@@ -305,6 +317,9 @@ export function QuickAddTaskWidget() {
                   />
                 )}
               </div>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Optional - leave empty for no deadline
+              </p>
             </div>
           </div>
 

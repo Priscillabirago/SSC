@@ -18,6 +18,8 @@ export function useUpdateProfile() {
     mutationFn: updateProfile,
     onSuccess: (data) => {
       queryClient.setQueryData(["profile"], data);
+      // Settings like weekly_study_hours and preferred_study_windows affect workload analysis
+      queryClient.invalidateQueries({ queryKey: ["schedule", "workload-analysis"] });
     }
   });
 }

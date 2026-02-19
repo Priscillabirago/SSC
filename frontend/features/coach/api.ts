@@ -53,6 +53,7 @@ export interface DailySummary {
   tone: "positive" | "neutral" | "encouraging";
   last_session_end: string | null;
   first_session_start: string | null;
+  has_remaining_sessions: boolean;
   user_timezone: string;
 }
 

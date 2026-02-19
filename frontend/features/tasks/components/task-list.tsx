@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, Clock, Pencil, Search, Filter, X, ChevronDown, ChevronRight, Plus, Trash2, Repeat, Settings, Info, Calendar, ExternalLink, ListTodo, Edit2, GripVertical, ChevronUp } from "lucide-react";
+import { CheckCircle2, Clock, Pencil, Search, Filter, X, ChevronDown, ChevronRight, Plus, Trash2, Repeat, Settings, Info, Calendar, ExternalLink, ListTodo, Edit2, GripVertical, ChevronUp, MoreVertical, StickyNote, Check, Loader2, Sparkles, AlertCircle } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -27,10 +27,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatDate, formatTimer, localDateTimeToUTCISO, parseBackendDateTime } from "@/lib/utils";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { formatDate, formatTimer, localDateTimeToUTCISO, parseBackendDateTime, parseTimeToMinutes } from "@/lib/utils";
 import type { Subject, Subtask, Task, TaskStatus, StudySession } from "@/lib/types";
 import { useDeleteTask, useGenerateSubtasks, useUpdateTask } from "@/features/tasks/hooks";
 import { useSessions } from "@/features/schedule/hooks";
@@ -98,16 +106,11 @@ interface SortableSubtaskItemProps {
   task: Task;
   index: number;
   editingSubtaskText: { taskId: number; subtaskId: string; text: string } | null;
-  editingSubtaskDetails: { taskId: number; subtaskId: string; estimatedMinutes: number | null } | null;
   setEditingSubtaskText: (value: { taskId: number; subtaskId: string; text: string } | null) => void;
-  setEditingSubtaskDetails: (value: { taskId: number; subtaskId: string; estimatedMinutes: number | null } | null) => void;
   toggleSubtask: (taskId: number, subtaskId: string) => void;
   saveSubtaskEdit: (taskId: number, subtaskId: string) => void;
   cancelSubtaskEdit: () => void;
   startEditingSubtask: (taskId: number, subtaskId: string, currentTitle: string) => void;
-  startEditingSubtaskDetails: (taskId: number, subtaskId: string, e?: React.MouseEvent) => void;
-  saveSubtaskDetails: (taskId: number, subtaskId: string) => void;
-  cancelSubtaskDetailsEdit: () => void;
   deleteSubtask: (taskId: number, subtaskId: string) => void;
 }
 
@@ -117,20 +120,14 @@ const SortableSubtaskItem = ({
   task,
   index,
   editingSubtaskText,
-  editingSubtaskDetails,
   setEditingSubtaskText,
-  setEditingSubtaskDetails,
   toggleSubtask,
   saveSubtaskEdit,
   cancelSubtaskEdit,
   startEditingSubtask,
-  startEditingSubtaskDetails,
-  saveSubtaskDetails,
-  cancelSubtaskDetailsEdit,
   deleteSubtask,
 }: SortableSubtaskItemProps) => {
   const isEditing = editingSubtaskText?.taskId === task.id && editingSubtaskText?.subtaskId === subtask.id;
-  const isEditingDetails = editingSubtaskDetails?.taskId === task.id && editingSubtaskDetails?.subtaskId === subtask.id;
   
   // Disable drag when editing to prevent interference
   const {
@@ -142,10 +139,8 @@ const SortableSubtaskItem = ({
     isDragging,
   } = useSortable({ 
     id: subtask.id,
-    disabled: isEditing || isEditingDetails
+    disabled: isEditing
   });
-  
-  const estimatedTimeInputRef = useRef<HTMLInputElement>(null);
   
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -156,19 +151,14 @@ const SortableSubtaskItem = ({
   return (
     <div ref={setNodeRef} style={style} className="space-y-1">
       <div className="flex items-start gap-2 text-xs group">
-        {!isEditingDetails && (
-          <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing mt-1.5">
-            <GripVertical className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-          </div>
-        )}
-        {isEditingDetails && (
-          <div className="mt-1.5 w-3.5" />
-        )}
+        <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing mt-1.5">
+          <GripVertical className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
         <Checkbox
           checked={subtask.completed}
           onCheckedChange={() => toggleSubtask(task.id, subtask.id)}
           className="h-3.5 w-3.5 mt-1"
-          disabled={isEditing || isEditingDetails}
+          disabled={isEditing}
         />
         {isEditing ? (
           <div className="flex-1 flex items-center gap-1">
@@ -218,38 +208,9 @@ const SortableSubtaskItem = ({
                 >
                   {subtask.title}
                 </button>
-                {subtask.estimated_minutes && (
-                  <span className="text-muted-foreground text-[10px] whitespace-nowrap">
-                    ({formatTimer(subtask.estimated_minutes)})
-                  </span>
-                )}
               </div>
             </div>
             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-5 w-5"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        startEditingSubtaskDetails(task.id, subtask.id, e);
-                      }}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      aria-label="Edit details"
-                    >
-                      <Settings className="h-3 w-3 text-muted-foreground" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Edit time & notes</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -286,71 +247,6 @@ const SortableSubtaskItem = ({
           </>
         )}
       </div>
-      {isEditingDetails && editingSubtaskDetails && (
-        <div 
-          className="ml-8 p-2 bg-muted/50 rounded border space-y-2 z-10 relative"
-        >
-          <div className="flex items-center gap-2">
-            <Label className="text-[10px] w-20">Est. time:</Label>
-            <Input
-              ref={estimatedTimeInputRef}
-              type="number"
-              min="0"
-              className="h-6 text-xs w-20"
-              placeholder="min"
-              value={editingSubtaskDetails.estimatedMinutes ?? ""}
-              onChange={(e) => {
-                e.stopPropagation();
-                setEditingSubtaskDetails({
-                  ...editingSubtaskDetails,
-                  estimatedMinutes: e.target.value ? Number.parseInt(e.target.value, 10) : null,
-                });
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-              }}
-              onFocus={(e) => {
-                e.stopPropagation();
-              }}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  saveSubtaskDetails(task.id, subtask.id);
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  cancelSubtaskDetailsEdit();
-                }
-              }}
-              autoFocus
-            />
-            <div className="flex gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-5 text-[10px]"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  saveSubtaskDetails(task.id, subtask.id);
-                }}
-              >
-                Save
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-5 text-[10px]"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  cancelSubtaskDetailsEdit();
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
@@ -362,7 +258,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   const generateSubtasks = useGenerateSubtasks();
   const { data: sessions } = useSessions();
   const { startSession } = useFocusSession();
-  const { stopQuickTrack, isActive: isQuickTrackActive, getElapsedTime, getStartTime } = useQuickTrack();
+  const { startQuickTrack, stopQuickTrack, isActive: isQuickTrackActive, getElapsedTime, getStartTime } = useQuickTrack();
   const [editId, setEditId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Partial<Task>>({});
   const [editAllFuture, setEditAllFuture] = useState(false);
@@ -370,8 +266,16 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   const [expandedSubtasks, setExpandedSubtasks] = useState<Set<number>>(new Set());
   const [editingSubtask, setEditingSubtask] = useState<{ taskId: number; subtaskId: string | null } | null>(null);
   const [editingSubtaskText, setEditingSubtaskText] = useState<{ taskId: number; subtaskId: string; text: string } | null>(null);
-  const [editingSubtaskDetails, setEditingSubtaskDetails] = useState<{ taskId: number; subtaskId: string; estimatedMinutes: number | null } | null>(null);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
+  const [editingDeadlineId, setEditingDeadlineId] = useState<number | null>(null);
+  const [quickDeadlineValue, setQuickDeadlineValue] = useState<string>("");
+  const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
+  const [editingNotes, setEditingNotes] = useState<Map<number, string>>(new Map());
+  const [savingNotes, setSavingNotes] = useState<Set<number>>(new Set());
+  const [pendingSaveNotes, setPendingSaveNotes] = useState<Set<number>>(new Set());
+  const [notesLastEdited, setNotesLastEdited] = useState<Map<number, Date>>(new Map());
+  const notesSaveTimeouts = useRef<Map<number, NodeJS.Timeout>>(new Map());
+  const notesEditorRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   
   // Drag and drop sensors
   const sensors = useSensors(
@@ -387,87 +291,49 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   const [completedSectionExpanded, setCompletedSectionExpanded] = useState(true);
   const [showAllCompleted, setShowAllCompleted] = useState(false);
   
-  // Timer state: track which task is being timed and when it started
-  const [activeTimers, setActiveTimers] = useState<Map<number, number>>(() => {
-    // Load from localStorage on mount
-    if (globalThis.window !== undefined) {
-      const saved = globalThis.window.localStorage.getItem("activeTaskTimers");
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          const map = new Map<number, number>();
-          Object.entries(parsed).forEach(([taskId, startTime]) => {
-            map.set(Number(taskId), Number(startTime));
-          });
-          return map;
-        } catch {
-          return new Map();
-        }
-      }
-    }
-    return new Map();
-  });
+  // Helper: Check if there's an active scheduled session for a task
+  const getActiveSessionForTask = (taskId: number): StudySession | null => {
+    if (!sessions) return null;
+    const now = new Date();
+    return sessions.find((s) => {
+      if (s.task_id !== taskId) return false;
+      if (s.status !== "planned" && s.status !== "in_progress") return false;
+      const startTime = new Date(s.start_time);
+      const endTime = new Date(s.end_time);
+      return startTime <= now && now <= endTime;
+    }) || null;
+  };
   
-  const [elapsedTimes, setElapsedTimes] = useState<Map<number, number>>(new Map());
-  
-  // Update elapsed times every second for active timers
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const now = Date.now();
-      const newElapsed = new Map<number, number>();
-      
-      activeTimers.forEach((startTime, taskId) => {
-        const elapsed = Math.floor((now - startTime) / 1000 / 60); // minutes
-        newElapsed.set(taskId, elapsed);
-      });
-      
-      setElapsedTimes(newElapsed);
-    }, 1000);
-    
-    return () => clearInterval(interval);
-  }, [activeTimers]);
-  
-  // Save active timers to localStorage whenever they change
-  useEffect(() => {
-    if (globalThis.window !== undefined) {
-      if (activeTimers.size > 0) {
-        const obj: Record<string, number> = {};
-        activeTimers.forEach((startTime, taskId) => {
-          obj[String(taskId)] = startTime;
+  const startTimer = (taskId: number, skipOverlapCheck: boolean = false) => {
+    // Check for overlapping scheduled session
+    if (!skipOverlapCheck) {
+      const activeSession = getActiveSessionForTask(taskId);
+      if (activeSession) {
+        const startTime = new Date(activeSession.start_time);
+        const endTime = new Date(activeSession.end_time);
+        const timeStr = `${startTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} - ${endTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+        
+        toast({
+          title: "Scheduled session in progress",
+          description: `You have a session scheduled for ${timeStr}. Using Quick Track may cause double-counted time. Consider using Focus Mode from the Schedule page instead.`,
+          duration: 8000,
         });
-        globalThis.window.localStorage.setItem("activeTaskTimers", JSON.stringify(obj));
-      } else {
-        globalThis.window.localStorage.removeItem("activeTaskTimers");
+        // Still start the timer but warn the user
       }
     }
-  }, [activeTimers]);
-  
-  const startTimer = (taskId: number) => {
-    setActiveTimers((prev) => {
-      const next = new Map(prev);
-      next.set(taskId, Date.now());
-      return next;
-    });
+    
+    // Use QuickTrackContext to start timer (syncs across pages)
+    startQuickTrack(taskId);
   };
   
   const stopTimer = (taskId: number, addToActual: boolean = true) => {
-    const startTime = activeTimers.get(taskId);
-    if (!startTime) return;
+    // Use QuickTrackContext to stop timer (syncs across pages)
+    // stopQuickTrack returns elapsed minutes and removes timer from context
+    const elapsedMinutes = stopQuickTrack(taskId, false);
     
-    const elapsedMinutes = Math.floor((Date.now() - startTime) / 1000 / 60);
+    if (!elapsedMinutes) return; // Timer wasn't active
     
-    setActiveTimers((prev) => {
-      const next = new Map(prev);
-      next.delete(taskId);
-      return next;
-    });
-    
-    setElapsedTimes((prev) => {
-      const next = new Map(prev);
-      next.delete(taskId);
-      return next;
-    });
-    
+    // Save to timer_minutes_spent if requested
     if (addToActual && elapsedMinutes > 0) {
       const task = tasks.find((t) => t.id === taskId);
       if (task) {
@@ -511,11 +377,26 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     };
   };
 
+  // Helper: Start focus mode for a task (used in multiple places)
+  const startFocusModeForTask = (
+    task: Task,
+    taskSubject: Subject | null,
+    quickTrackTimeMs: number,
+    quickTrackStartTime: number | null
+  ) => {
+    const tempSession = createSessionFromTask(task);
+    startSession(tempSession, task, taskSubject, quickTrackTimeMs, quickTrackStartTime);
+    updateTask.mutate(
+      { id: task.id, payload: { status: "in_progress" } },
+      { onSuccess: () => toast({ title: "Focus session started", description: "Entering focus mode..." }) }
+    );
+  };
+
   // Helper function to handle task completion checkbox
   const handleTaskCompletion = (task: Task, checked: boolean) => {
-    if (checked && activeTimers.has(task.id)) {
+    if (checked && isQuickTrackActive(task.id)) {
       stopTimer(task.id, true);
-    } else if (!checked && activeTimers.has(task.id)) {
+    } else if (!checked && isQuickTrackActive(task.id)) {
       startTimer(task.id);
     }
     const handleSuccess = () => {
@@ -624,6 +505,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
         payload: {
           title: payload.title ?? template.title,
           description: payload.description ?? template.description,
+          notes: payload.notes ?? template.notes,
           priority: payload.priority ?? template.priority,
           estimated_minutes: payload.estimated_minutes ?? template.estimated_minutes,
           subject_id: payload.subject_id ?? template.subject_id
@@ -636,13 +518,34 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
 
   // Helper function to handle task save
   const handleTaskSave = (task: Task) => {
-    const payload = { ...draft };
-    payload.subject_id ??= null;
+    const payload: Partial<Task> = {};
+    
+    // Only include fields that were actually edited or need to be sent
+    // Copy all draft fields that exist
+    if (draft.title !== undefined) payload.title = draft.title;
+    if (draft.description !== undefined) payload.description = draft.description;
+    if (draft.notes !== undefined) payload.notes = draft.notes;
+    if (draft.priority !== undefined) payload.priority = draft.priority;
+    if (draft.status !== undefined) payload.status = draft.status;
+    if (draft.subject_id !== undefined) payload.subject_id = draft.subject_id ?? null;
+    if (draft.subtasks !== undefined) payload.subtasks = draft.subtasks;
     
     // Always process deadline if it's in the draft (user edited it) or if we need to clear it
-    // This ensures deadline updates are sent to backend
     if ('deadline' in draft) {
       processDeadline(payload, task.id);
+    }
+    
+    // Handle estimated_minutes: always explicitly include it
+    // The draft is initialized with task data, so estimated_minutes is always present
+    // If user edited to a valid value (>= 5), send that; otherwise send original
+    const draftEstimatedMinutes = draft.estimated_minutes;
+    if (draftEstimatedMinutes !== undefined && draftEstimatedMinutes !== null && draftEstimatedMinutes >= 5) {
+      // User entered a valid value - send it
+      payload.estimated_minutes = draftEstimatedMinutes;
+    } else {
+      // Invalid or not edited - send original value
+      // This ensures the field is always in the payload
+      payload.estimated_minutes = task.estimated_minutes ?? null;
     }
     
     const handleSaveSuccess = createSaveSuccessHandler(task);
@@ -728,6 +631,38 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     return "";
   };
 
+  // Helper: Get urgency info for task (overdue, due today, or normal)
+  const getTaskUrgency = (task: Task): { isOverdue: boolean; isDueToday: boolean; cardBgClass: string; borderClass: string } => {
+    if (!task.deadline || task.is_completed) {
+      return { isOverdue: false, isDueToday: false, cardBgClass: "", borderClass: "" };
+    }
+    
+    const deadlineDate = parseBackendDateTime(task.deadline);
+    const now = new Date();
+    const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const deadlineDateOnlyUTC = new Date(Date.UTC(deadlineDate.getUTCFullYear(), deadlineDate.getUTCMonth(), deadlineDate.getUTCDate()));
+    
+    if (deadlineDateOnlyUTC < todayUTC) {
+      // Overdue - more visible red tint
+      return { 
+        isOverdue: true, 
+        isDueToday: false, 
+        cardBgClass: "bg-red-50/40", 
+        borderClass: "border-l-2 border-l-red-400/60" 
+      };
+    } else if (deadlineDateOnlyUTC.getTime() === todayUTC.getTime()) {
+      // Due today - more visible amber tint
+      return { 
+        isOverdue: false, 
+        isDueToday: true, 
+        cardBgClass: "bg-amber-50/40", 
+        borderClass: "border-l-2 border-l-amber-400/60" 
+      };
+    }
+    
+    return { isOverdue: false, isDueToday: false, cardBgClass: "", borderClass: "" };
+  };
+
   // Helper function to format time difference
   const formatTimeDifference = (diffMs: number): string => {
     const diffMins = Math.floor(diffMs / (1000 * 60));
@@ -766,7 +701,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
 
   // Helper function to render actual time display
   const renderActualTime = (task: Task) => {
-    const currentElapsed = elapsedTimes.get(task.id) ?? 0;
+    const currentElapsed = getElapsedTime(task.id);
     // Use total_minutes_spent if available (backend computed property)
     // Otherwise calculate: actual_minutes_spent (sessions) + timer_minutes_spent (timers)
     // Only add currentElapsed if there's an active timer that hasn't been saved yet
@@ -953,58 +888,6 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
         onSuccess: () => toast({ title: "Subtask reordered" })
       }
     );
-  };
-  
-  const startEditingSubtaskDetails = (taskId: number, subtaskId: string, e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    e?.preventDefault();
-    
-    // Close any other editing states first
-    setEditingSubtaskText(null);
-    
-    const task = tasks.find((t) => t.id === taskId);
-    const subtask = task?.subtasks?.find((st) => st.id === subtaskId);
-    if (!subtask) return;
-    
-    setEditingSubtaskDetails({
-      taskId,
-      subtaskId,
-      estimatedMinutes: subtask.estimated_minutes ?? null
-    });
-  };
-  
-  const saveSubtaskDetails = (taskId: number, subtaskId: string) => {
-    if (!editingSubtaskDetails?.taskId || editingSubtaskDetails.taskId !== taskId || editingSubtaskDetails.subtaskId !== subtaskId) return;
-    
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task?.subtasks) return;
-    
-    const updatedSubtasks = task.subtasks.map((st) =>
-      st.id === subtaskId
-        ? {
-            ...st,
-            estimated_minutes: editingSubtaskDetails.estimatedMinutes
-            // Notes removed for now
-          }
-        : st
-    );
-    
-    updateTask.mutate(
-      {
-        id: taskId,
-        payload: { subtasks: updatedSubtasks }
-      },
-      {
-        onSuccess: () => {
-          setEditingSubtaskDetails(null);
-          toast({ title: "Subtask details updated" });
-        }
-      }
-    );
-  };
-  
-  const cancelSubtaskDetailsEdit = () => {
-    setEditingSubtaskDetails(null);
   };
   
   const getSubtaskProgress = (task: Task): { completed: number; total: number; percent: number } => {
@@ -1313,39 +1196,110 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
       );
     }
     return (
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          <ListTodo className="h-3.5 w-3.5 text-blue-500 shrink-0" />
-          <p className="text-sm font-medium text-foreground truncate">{task.title}</p>
-          {task.is_recurring_template && (
-            <Badge variant="outline" className="h-5 px-2 text-[10px] font-medium border-purple-300 text-purple-700 bg-purple-50 flex items-center gap-1 shrink-0">
-              <Repeat className="h-3 w-3" />
-              Recurring
-            </Badge>
-          )}
-          {task.recurring_template_id && !task.is_recurring_template && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Badge variant="outline" className="h-5 px-2 text-[10px] font-medium border-purple-200 text-purple-600 bg-purple-50/50 cursor-help flex items-center gap-1 shrink-0">
-                    <Repeat className="h-3 w-3" />
-                  </Badge>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>This is an instance of a recurring task. Click "Manage Series" to edit the recurrence pattern.</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <Badge variant="outline" className={`h-5 min-h-5 px-3 text-[10px] font-semibold uppercase tracking-wide whitespace-nowrap shrink-0 ${priorityColor[task.priority]}`}>
-            {task.priority}
-          </Badge>
-          <Badge variant="outline" className={`h-5 min-h-5 px-3 text-[10px] font-semibold whitespace-nowrap shrink-0 ${statusColor[task.status]}`}>
-            {statusLabel[task.status]}
-          </Badge>
-          {renderSessionCountBadge(task.id)}
+      <div className="space-y-1.5">
+        {/* Title with inline badges */}
+        <div className="flex items-start gap-2 flex-wrap">
+          <p className="text-sm font-medium text-foreground break-words leading-tight flex-1 min-w-0">{task.title}</p>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={`inline-flex items-center rounded-full border px-2 h-5 text-[10px] font-medium uppercase tracking-wide whitespace-nowrap shrink-0 cursor-pointer hover:opacity-80 transition-opacity focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${priorityColor[task.priority]}`}
+                >
+              {task.priority}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-32">
+                <DropdownMenuItem
+                  onClick={() => updateTask.mutate({ id: task.id, payload: { priority: "low" } })}
+                  className={task.priority === "low" ? "bg-muted" : ""}
+                >
+                  Low
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => updateTask.mutate({ id: task.id, payload: { priority: "medium" } })}
+                  className={task.priority === "medium" ? "bg-muted" : ""}
+                >
+                  Medium
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => updateTask.mutate({ id: task.id, payload: { priority: "high" } })}
+                  className={task.priority === "high" ? "bg-muted" : ""}
+                >
+                  High
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => updateTask.mutate({ id: task.id, payload: { priority: "critical" } })}
+                  className={task.priority === "critical" ? "bg-muted" : ""}
+                >
+                  Critical
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={`inline-flex items-center rounded-full border px-2 h-5 text-[10px] font-medium whitespace-nowrap shrink-0 cursor-pointer hover:opacity-80 transition-opacity focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${statusColor[task.status]}`}
+                >
+              {statusLabel[task.status]}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-36">
+                <DropdownMenuItem
+                  onClick={() => updateTask.mutate({ id: task.id, payload: { status: "todo" } })}
+                  className={task.status === "todo" ? "bg-muted" : ""}
+                >
+                  To Do
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => updateTask.mutate({ id: task.id, payload: { status: "in_progress" } })}
+                  className={task.status === "in_progress" ? "bg-muted" : ""}
+                >
+                  In Progress
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => updateTask.mutate({ id: task.id, payload: { status: "blocked" } })}
+                  className={task.status === "blocked" ? "bg-muted" : ""}
+                >
+                  Blocked
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => updateTask.mutate({ id: task.id, payload: { status: "on_hold" } })}
+                  className={task.status === "on_hold" ? "bg-muted" : ""}
+                >
+                  On Hold
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => updateTask.mutate({ id: task.id, payload: { status: "completed", is_completed: true } })}
+                  className={task.status === "completed" ? "bg-muted" : ""}
+                >
+                  Completed
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {task.is_recurring_template && (
+              <Badge variant="outline" className="h-5 px-2 text-[10px] font-medium border-purple-300 text-purple-700 bg-purple-50 flex items-center gap-1 shrink-0">
+                <Repeat className="h-3 w-3" />
+              </Badge>
+            )}
+            {task.recurring_template_id && !task.is_recurring_template && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" className="h-5 px-2 text-[10px] font-medium border-purple-200 text-purple-600 bg-purple-50/50 cursor-help flex items-center gap-1 shrink-0">
+                      <Repeat className="h-3 w-3" />
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>This is an instance of a recurring task. Click "Manage Series" to edit the recurrence pattern.</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            {getSessionCount(task.id) > 0 && renderSessionCountBadge(task.id)}
+          </div>
         </div>
       </div>
     );
@@ -1449,20 +1403,39 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
       {/* Second row: Time estimates */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex flex-col gap-1">
-          <Label className="text-[10px] text-muted-foreground">Est. (min)</Label>
+          <Label className="text-[10px] text-muted-foreground">Est. (hh:mm)</Label>
           <Input
             className="h-7 w-24 text-xs"
-            type="number"
-            min="0"
-            value={draft.estimated_minutes ?? task.estimated_minutes ?? ""}
-            onChange={e => setDraft((d) => ({ ...d, estimated_minutes: e.target.value ? Number(e.target.value) : undefined }))}
-            placeholder="0"
+            type="text"
+            inputMode="numeric"
+            placeholder="e.g. 1:30"
+            pattern="[0-9]{1,2}:[0-5][0-9]"
+            value={
+              (() => {
+                const minutes = draft.estimated_minutes ?? task.estimated_minutes ?? null;
+                if (minutes == null) return "";
+                const hours = Math.floor(minutes / 60);
+                const mins = minutes % 60;
+                if (hours === 0) return `${mins}`; // allow short values like "30"
+                return `${hours}:${String(mins).padStart(2, "0")}`;
+              })()
+            }
+            onChange={e => {
+              const raw = e.target.value;
+              const minutes = parseTimeToMinutes(raw);
+              // Always update draft with parsed value (even if < 5)
+              // We'll validate on save and use original if invalid
+              setDraft((d) => ({
+                ...d,
+                estimated_minutes: minutes ?? undefined,
+              }));
+            }}
           />
         </div>
         
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-1">
-            <Label className="text-[10px] text-muted-foreground">Actual (min)</Label>
+            <Label className="text-[10px] text-muted-foreground">Timer Time</Label>
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1470,19 +1443,49 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
                 </TooltipTrigger>
                 <TooltipContent>
                   <p className="max-w-xs">
-                    Total time spent = session time (from scheduled sessions) + timer time (from Quick Track). Automatically calculated and cannot be manually edited.
+                    Time tracked via Quick Track (Tasks page timer). You can edit this to correct any mistakes.
                   </p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
           </div>
           <Input
-            className="h-7 w-24 text-xs bg-muted/50 cursor-not-allowed"
+            className="h-7 w-20 text-xs"
             type="number"
             min="0"
-            value={task.total_minutes_spent ?? ""}
+            value={draft.timer_minutes_spent ?? task.timer_minutes_spent ?? 0}
+            onChange={e => {
+              const value = e.target.value === "" ? 0 : Number.parseInt(e.target.value, 10);
+              setDraft((d) => ({
+                ...d,
+                timer_minutes_spent: Number.isNaN(value) ? 0 : value,
+              }));
+            }}
+            placeholder="0"
+          />
+        </div>
+        
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-1">
+            <Label className="text-[10px] text-muted-foreground">Total Actual</Label>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="h-3 w-3 text-muted-foreground cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="max-w-xs">
+                    Session time ({task.actual_minutes_spent ?? 0} min from completed sessions) + Timer time = Total.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+          <Input
+            className="h-7 w-20 text-xs bg-muted/50 cursor-not-allowed"
+            type="number"
+            value={(task.actual_minutes_spent ?? 0) + (draft.timer_minutes_spent ?? task.timer_minutes_spent ?? 0)}
             disabled
-            placeholder="Auto"
             readOnly
           />
         </div>
@@ -1565,6 +1568,17 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
         </div>
       </div>
       
+      {/* Notes field */}
+      <div className="flex flex-col gap-1">
+        <Label className="text-[10px] text-muted-foreground">Notes</Label>
+        <Textarea
+          className="min-h-[100px] text-xs resize-y"
+          placeholder="Add notes, reminders, or context for this task..."
+          value={draft.notes ?? task.notes ?? ""}
+          onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
+        />
+      </div>
+      
       {/* Action buttons */}
       <div className="flex items-center gap-2 pt-1">
         <Button size="sm" className="h-7 text-xs" onClick={() => handleTaskSave(task)}>
@@ -1592,35 +1606,750 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
 
   // Helper: Render task display view
   const renderTaskDisplay = (task: Task, subject: Subject | undefined) => (
-    <div className="flex flex-wrap gap-x-2 gap-y-1 items-center">
-      <span className="whitespace-nowrap">
-        Est: {formatTimer(task.estimated_minutes)}
-        {renderActualTime(task)}
-        {activeTimers.has(task.id) && (
-          <span className="text-blue-600 font-medium animate-pulse">
-            {" "}• ⏱️ {formatTimer(elapsedTimes.get(task.id) ?? 0)}
+    <div className="space-y-1">
+      {/* Primary metadata - compact and refined */}
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1 whitespace-nowrap">
+          <Clock className="h-3 w-3 opacity-60" />
+          <span>
+            {formatTimer(task.estimated_minutes)}
+            {renderActualTime(task)}
+            {isQuickTrackActive(task.id) && (
+              <span className="text-blue-600 font-medium animate-pulse ml-1">
+                • {formatTimer(getElapsedTime(task.id))}
+              </span>
+            )}
           </span>
+        </span>
+        {editingDeadlineId === task.id ? (
+          <>
+            <span className="text-muted-foreground/40">•</span>
+            <div className="flex items-center gap-1">
+              <Input
+                type="date"
+                className="h-6 text-xs w-32"
+                value={quickDeadlineValue}
+                onChange={(e) => setQuickDeadlineValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && quickDeadlineValue) {
+                    const [year, month, day] = quickDeadlineValue.split("-").map(Number);
+                    const deadlineISO = localDateTimeToUTCISO(year, month, day, 23, 59);
+                    updateTask.mutate({ id: task.id, payload: { deadline: deadlineISO } });
+                    setEditingDeadlineId(null);
+                    setQuickDeadlineValue("");
+                  } else if (e.key === "Escape") {
+                    setEditingDeadlineId(null);
+                    setQuickDeadlineValue("");
+                  }
+                }}
+                onBlur={() => {
+                  if (quickDeadlineValue) {
+                    const [year, month, day] = quickDeadlineValue.split("-").map(Number);
+                    const deadlineISO = localDateTimeToUTCISO(year, month, day, 23, 59);
+                    updateTask.mutate({ id: task.id, payload: { deadline: deadlineISO } });
+                  }
+                  setEditingDeadlineId(null);
+                  setQuickDeadlineValue("");
+                }}
+                autoFocus
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5"
+                onClick={() => {
+                  if (quickDeadlineValue) {
+                    const [year, month, day] = quickDeadlineValue.split("-").map(Number);
+                    const deadlineISO = localDateTimeToUTCISO(year, month, day, 23, 59);
+                    updateTask.mutate({ id: task.id, payload: { deadline: deadlineISO } });
+                  }
+                  setEditingDeadlineId(null);
+                  setQuickDeadlineValue("");
+                }}
+              >
+                <CheckCircle2 className="h-3 w-3 text-green-600" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5"
+                onClick={() => {
+                  setEditingDeadlineId(null);
+                  setQuickDeadlineValue("");
+                }}
+              >
+                <X className="h-3 w-3 text-muted-foreground" />
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            {task.deadline ? (
+              <>
+                <span className="text-muted-foreground/40">•</span>
+                <button
+                  type="button"
+                  className={`flex items-center gap-1 whitespace-nowrap cursor-pointer hover:opacity-80 transition-opacity ${getDeadlineStyle(task.deadline)}`}
+                  onClick={() => {
+                    const deadlineDate = parseBackendDateTime(task.deadline!);
+                    const year = deadlineDate.getUTCFullYear();
+                    const month = String(deadlineDate.getUTCMonth() + 1).padStart(2, "0");
+                    const day = String(deadlineDate.getUTCDate()).padStart(2, "0");
+                    setQuickDeadlineValue(`${year}-${month}-${day}`);
+                    setEditingDeadlineId(task.id);
+                  }}
+                  title="Click to change deadline"
+                >
+                  {(() => {
+                    const deadlineDate = parseBackendDateTime(task.deadline!);
+                    const now = new Date();
+                    const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+                    const deadlineDateOnlyUTC = new Date(Date.UTC(deadlineDate.getUTCFullYear(), deadlineDate.getUTCMonth(), deadlineDate.getUTCDate()));
+                    
+                    if (deadlineDateOnlyUTC < todayUTC) {
+                      // Overdue
+                      return (
+                        <>
+                          <AlertCircle className="h-3 w-3 text-red-600" />
+                          <span>{formatDate(task.deadline)}</span>
+                        </>
+                      );
+                    } else if (deadlineDateOnlyUTC.getTime() === todayUTC.getTime()) {
+                      // Due today
+                      return (
+                        <>
+                          <Clock className="h-3 w-3 text-amber-600" />
+                          <span>{formatDate(task.deadline)}</span>
+                        </>
+                      );
+                    } else {
+                      // Future
+                      return (
+                        <>
+              <Calendar className="h-3 w-3 opacity-60" />
+              <span>{formatDate(task.deadline)}</span>
+                        </>
+                      );
+                    }
+                  })()}
+                </button>
+          </>
+            ) : (
+          <>
+            <span className="text-muted-foreground/40">•</span>
+                <button
+                  type="button"
+                  className="flex items-center gap-1 whitespace-nowrap cursor-pointer hover:opacity-80 transition-opacity text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    const today = new Date();
+                    const year = today.getFullYear();
+                    const month = String(today.getMonth() + 1).padStart(2, "0");
+                    const day = String(today.getDate()).padStart(2, "0");
+                    setQuickDeadlineValue(`${year}-${month}-${day}`);
+                    setEditingDeadlineId(task.id);
+                  }}
+                  title="Click to add deadline"
+                >
+                  <Calendar className="h-3 w-3 opacity-60" />
+                  <span>Add deadline</span>
+                </button>
+              </>
+            )}
+            <span className="text-muted-foreground/40">•</span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={`flex items-center gap-1.5 whitespace-nowrap cursor-pointer hover:opacity-80 transition-opacity ${
+                    subject ? "" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  title="Click to change category"
+                >
+              <span
+                className="inline-flex h-2 w-2 rounded-full shrink-0"
+                    style={{ backgroundColor: subject?.color || "transparent" }}
+              />
+                  <span>{subject?.name || "No category"}</span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-40">
+                <DropdownMenuItem
+                  onClick={() => updateTask.mutate({ id: task.id, payload: { subject_id: null } })}
+                  className={subject === null || subject === undefined ? "bg-muted" : ""}
+                >
+                  <span className="inline-flex h-2 w-2 rounded-full shrink-0 bg-muted-foreground/30 mr-2" />
+                  <span>General</span>
+                </DropdownMenuItem>
+                {subjects.map((s) => (
+                  <DropdownMenuItem
+                    key={s.id}
+                    onClick={() => updateTask.mutate({ id: task.id, payload: { subject_id: s.id } })}
+                    className={subject?.id === s.id ? "bg-muted" : ""}
+                  >
+                    <span
+                      className="inline-flex h-2 w-2 rounded-full shrink-0 mr-2"
+                      style={{ backgroundColor: s.color }}
+                    />
+                    {s.name}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
         )}
-      </span>
-      {task.deadline && (
-        <>
-          <span className="text-muted-foreground/60">•</span>
-          <span className={`whitespace-nowrap ${getDeadlineStyle(task.deadline)}`}>
-            Due {formatDate(task.deadline)}
-          </span>
-        </>
-      )}
-      <span className="text-muted-foreground/60">•</span>
-      <span className="whitespace-nowrap">{subject ? subject.name : "General"}</span>
+      </div>
+      {/* Description if exists */}
       {task.description && (
-        <>
-          <span className="text-muted-foreground/60">•</span>
-          <span className="text-xs italic truncate max-w-xs">{task.description}</span>
-        </>
+        <p className="text-xs text-muted-foreground/70 break-words leading-relaxed line-clamp-2">
+          {task.description}
+        </p>
       )}
+      
+      {/* Notes section */}
+      {renderNotesSection(task)}
     </div>
   );
 
+
+  // Helper: Format relative time (e.g., "Just now", "2 hours ago")
+  const formatRelativeTime = (date: Date): string => {
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins} minute${diffMins === 1 ? '' : 's'} ago`;
+    if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+    if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+    return date.toLocaleDateString();
+  };
+
+  // Helper: Auto-save notes (called after debounce)
+  const saveNotes = async (taskId: number, notesValue: string) => {
+    setPendingSaveNotes(prev => {
+      const next = new Set(prev);
+      next.delete(taskId);
+      return next;
+    });
+    setSavingNotes(prev => new Set(prev).add(taskId));
+    try {
+      await updateTask.mutateAsync({ id: taskId, payload: { notes: notesValue || null } });
+      setNotesLastEdited(prev => {
+        const next = new Map(prev);
+        next.set(taskId, new Date());
+        return next;
+      });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toast({
+        variant: "destructive",
+        title: "Failed to save notes",
+        description: errorMessage || "Please try again.",
+      });
+    } finally {
+      setSavingNotes(prev => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  };
+
+  // Debounced auto-save effect for notes
+  useEffect(() => {
+    editingNotes.forEach((notesValue, taskId) => {
+      const task = tasks.find(t => t.id === taskId);
+      if (!task) return;
+      
+      const currentNotes = task.notes ?? "";
+      if (notesValue === currentNotes) return; // No change, skip
+      
+      // Clear existing timeout
+      const existingTimeout = notesSaveTimeouts.current.get(taskId);
+      if (existingTimeout) {
+        clearTimeout(existingTimeout);
+      }
+      
+      // Set pending save state
+      setPendingSaveNotes(prev => new Set(prev).add(taskId));
+      
+      // Set new timeout for debounced save
+      const timeout = setTimeout(() => {
+        saveNotes(taskId, notesValue);
+        notesSaveTimeouts.current.delete(taskId);
+      }, 1000); // 1 second debounce
+      
+      notesSaveTimeouts.current.set(taskId, timeout);
+    });
+    
+    // Cleanup on unmount
+    return () => {
+      notesSaveTimeouts.current.forEach((timeout) => clearTimeout(timeout));
+      notesSaveTimeouts.current.clear();
+    };
+  }, [editingNotes, tasks]);
+
+  // Helper: Quick note templates
+  const noteTemplates = [
+    { 
+      label: "Progress update", 
+      text: "Progress:\n- Completed: \n- In progress: \n- Next steps: " 
+    },
+    { 
+      label: "Stuck on...", 
+      text: "Stuck on:\n- Issue: \n- Tried: \n- Need help with: " 
+    },
+    { 
+      label: "Key learnings", 
+      text: "Key learnings:\n- \n- \n- " 
+    },
+    { 
+      label: "To review", 
+      text: "To review:\n- \n- \n- " 
+    },
+    { 
+      label: "Questions", 
+      text: "Questions:\n- \n- \n- " 
+    },
+  ];
+
+  const applyNoteTemplate = (taskId: number, templateText: string) => {
+    const editor = notesEditorRefs.current.get(taskId);
+    if (editor) {
+      const selection = globalThis.getSelection();
+      const range = selection?.getRangeAt(0);
+      
+      // Insert template at cursor or append to end
+      if (range) {
+        const currentNotes = editor.textContent || "";
+        const newNotes = currentNotes ? `${currentNotes}\n\n${templateText}` : templateText;
+        editor.textContent = newNotes;
+        
+        // Move cursor to first placeholder
+        const firstPlaceholder = newNotes.indexOf(': ');
+        if (firstPlaceholder !== -1) {
+          range.setStart(editor.childNodes[0] || editor, firstPlaceholder + 2);
+          range.collapse(true);
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+        }
+      } else {
+        const currentNotes = editor.textContent || "";
+        editor.textContent = currentNotes ? `${currentNotes}\n\n${templateText}` : templateText;
+      }
+      
+      // Trigger input event to update state
+      const event = new Event('input', { bubbles: true });
+      editor.dispatchEvent(event);
+    }
+  };
+
+  // Helper: Convert URLs in text to clickable links
+  const convertUrlsToLinks = (element: HTMLElement) => {
+    // Get all text content
+    const text = element.innerText || element.textContent || "";
+    const urlRegex = /(https?:\/\/[^\s<>"]+)/g;
+    const urls = text.match(urlRegex);
+    
+    if (!urls || urls.length === 0) return;
+    
+    // Get existing links
+    const existingLinks = new Set(Array.from(element.querySelectorAll('a')).map(a => a.getAttribute('href')));
+    const newUrls = urls.filter(url => !existingLinks.has(url));
+    
+    if (newUrls.length === 0) return;
+    
+    // Save cursor position
+    const selection = globalThis.getSelection();
+    let cursorPos = 0;
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      const preCaretRange = range.cloneRange();
+      preCaretRange.selectNodeContents(element);
+      preCaretRange.setEnd(range.endContainer, range.endOffset);
+      cursorPos = preCaretRange.toString().length;
+    }
+    
+    // Simple approach: get innerHTML, replace URLs that aren't already in links
+    let html = element.innerHTML;
+    newUrls.forEach(url => {
+      // Only replace if URL is not already inside an <a> tag
+      const escapedUrl = url.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+      const urlInLinkRegex = new RegExp(String.raw`<a[^>]*>.*?${escapedUrl}.*?</a>`, 'gi');
+      if (!urlInLinkRegex.test(html)) {
+        // Replace URL with link, but preserve surrounding text
+        const replaceRegex = new RegExp(String.raw`(^|[^"']|>|\s)(${escapedUrl})([^<]*?)(<|$|\s)`, 'g');
+        html = html.replace(replaceRegex, (match, before, urlMatch, after, end) => {
+          // Check if we're inside an existing tag
+          const beforeMatch = html.substring(0, html.indexOf(match));
+          const lastOpenTag = beforeMatch.lastIndexOf('<');
+          const lastCloseTag = beforeMatch.lastIndexOf('>');
+          if (lastOpenTag > lastCloseTag) {
+            // Inside a tag, don't replace
+            return match;
+          }
+          return `${before}<a href="${urlMatch}" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline cursor-pointer" style="pointer-events: auto;" contenteditable="false">${urlMatch}</a>${after}${end}`;
+        });
+      }
+    });
+    
+    if (html !== element.innerHTML) {
+      element.innerHTML = html;
+      
+      // Restore cursor position
+      if (selection && cursorPos > 0) {
+        try {
+          const range = document.createRange();
+          const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+          let charCount = 0;
+          let targetNode: Node | null = null;
+          
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const nodeLength = node.textContent?.length || 0;
+            if (charCount + nodeLength >= cursorPos) {
+              targetNode = node;
+              break;
+            }
+            charCount += nodeLength;
+          }
+          
+          if (targetNode) {
+            range.setStart(targetNode, Math.min(cursorPos - charCount, targetNode.textContent?.length || 0));
+            range.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+        } catch (error: unknown) {
+          // If restoration fails, just focus
+          console.warn('Failed to restore cursor position:', error);
+          element.focus();
+        }
+      }
+    }
+  };
+
+  // Helper: Render notes section
+  const renderNotesSection = (task: Task) => {
+    const isExpanded = expandedNotes.has(task.id);
+    const notesValue = editingNotes.get(task.id) ?? task.notes ?? "";
+    const hasNotes = task.notes && task.notes.trim().length > 0;
+    const isSaving = savingNotes.has(task.id);
+    const isPendingSave = pendingSaveNotes.has(task.id);
+    const lastEdited = notesLastEdited.get(task.id);
+    const characterCount = notesValue.length;
+    let notesPreview = "";
+    if (hasNotes && task.notes) {
+      notesPreview = task.notes.length > 50 ? `${task.notes.substring(0, 50)}...` : task.notes;
+    }
+
+    return (
+      <div className="mt-2">
+        {isExpanded ? (
+          // Expanded state - prominent notes area
+          <div className="rounded-lg border border-border bg-card shadow-sm">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+              <div className="flex items-center gap-2">
+                <StickyNote className="h-4 w-4 text-primary" />
+                <span className="text-sm font-medium">Notes</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Sparkles className="h-3 w-3 mr-1" />
+                      Templates
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {noteTemplates.map((template) => (
+                      <DropdownMenuItem
+                        key={template.label}
+                        onClick={() => applyNoteTemplate(task.id, template.text)}
+                      >
+                        {template.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                {hasNotes && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={async () => {
+                      if (confirm("Clear all notes?")) {
+                        setEditingNotes(prev => {
+                          const next = new Map(prev);
+                          next.set(task.id, "");
+                          return next;
+                        });
+                        await saveNotes(task.id, "");
+                      }
+                    }}
+                  >
+                    <X className="h-3 w-3 mr-1" />
+                    Clear
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0"
+                  onClick={() => {
+                    setExpandedNotes(prev => {
+                      const next = new Set(prev);
+                      next.delete(task.id);
+                      return next;
+                    });
+                  }}
+                >
+                  <ChevronUp className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+            <div className="p-3">
+              {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-static-element-interactions, jsx-a11y/aria-role, jsx-a11y/no-noninteractive-tabindex */}
+              <div
+                ref={(el) => {
+                  if (el) {
+                    notesEditorRefs.current.set(task.id, el);
+                    // Initialize content when editor is first created or when notes change externally
+                    // Check if notesValue is HTML or plain text
+                    const isHTML = notesValue.includes('<') && notesValue.includes('>');
+                    if (isHTML) {
+                      // If it's HTML, set innerHTML
+                      if (el.innerHTML !== notesValue) {
+                        el.innerHTML = notesValue;
+                      }
+                    } else if (el.textContent !== notesValue) {
+                      // If it's plain text, set textContent and convert URLs
+                      el.textContent = notesValue;
+                      // Convert any URLs in initial content to links
+                      if (notesValue) {
+                        setTimeout(() => convertUrlsToLinks(el), 100);
+                      }
+                    }
+                  } else {
+                    notesEditorRefs.current.delete(task.id);
+                  }
+                }}
+                contentEditable
+                suppressContentEditableWarning
+                aria-label="Task notes editor"
+                onInput={(e) => {
+                  const editor = e.currentTarget;
+                  const value = editor.innerText || editor.textContent || "";
+                  
+                  // Convert URLs to links after a short delay (debounce)
+                  setTimeout(() => {
+                    convertUrlsToLinks(editor);
+                  }, 500);
+                  
+                  setEditingNotes(prev => {
+                    const next = new Map(prev);
+                    next.set(task.id, value);
+                    return next;
+                  });
+                }}
+                onPaste={(e) => {
+                  e.preventDefault();
+                  const text = e.clipboardData.getData('text/plain');
+                  const selection = globalThis.getSelection();
+                  
+                  if (selection && selection.rangeCount > 0) {
+                    const range = selection.getRangeAt(0);
+                    range.deleteContents();
+                    
+                    // Check if pasted text contains URLs
+                    const urlRegex = /(https?:\/\/[^\s]+)/g;
+                    if (urlRegex.test(text)) {
+                      // Create a text node with URLs converted to links
+                      const tempDiv = document.createElement('div');
+                      tempDiv.textContent = text;
+                      const html = tempDiv.innerHTML.replaceAll(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">$1</a>');
+                      tempDiv.innerHTML = html;
+                      
+                      // Insert the HTML
+                      const fragment = document.createDocumentFragment();
+                      while (tempDiv.firstChild) {
+                        fragment.appendChild(tempDiv.firstChild);
+                      }
+                      range.insertNode(fragment);
+                    } else {
+                      // Just insert plain text
+                      const textNode = document.createTextNode(text);
+                      range.insertNode(textNode);
+                    }
+                    
+                    // Move cursor after inserted content
+                    range.setStartAfter(range.endContainer);
+                    range.collapse(true);
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                    
+                    // Trigger input event
+                    const inputEvent = new Event('input', { bubbles: true });
+                    e.currentTarget.dispatchEvent(inputEvent);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  // Handle Enter key - ensure proper newline insertion
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    // eslint-disable-next-line deprecation/deprecation
+                    document.execCommand('insertLineBreak', false);
+                    return;
+                  }
+                  
+                  // Handle keyboard shortcuts for formatting
+                  // Detect Mac using userAgent (platform is deprecated)
+                  const isMac = /Mac|iPhone|iPad|iPod/.test(globalThis.navigator.userAgent);
+                  const isMod = isMac ? e.metaKey : e.ctrlKey;
+                  
+                  if (isMod && !e.shiftKey && !e.altKey) {
+                    if (e.key === 'b' || e.key === 'B') {
+                      e.preventDefault();
+                      // eslint-disable-next-line deprecation/deprecation
+                      document.execCommand('bold', false);
+                    } else if (e.key === 'i' || e.key === 'I') {
+                      e.preventDefault();
+                      // eslint-disable-next-line deprecation/deprecation
+                      document.execCommand('italic', false);
+                    } else if (e.key === 'u' || e.key === 'U') {
+                      e.preventDefault();
+                      // eslint-disable-next-line deprecation/deprecation
+                      document.execCommand('underline', false);
+                    }
+                  }
+                }}
+                onClick={(e) => {
+                  // Make links clickable - handle clicks on <a> tags
+                  const target = e.target as HTMLElement;
+                  const link = target.closest('a');
+                  if (link) {
+                    const href = link.getAttribute('href');
+                    if (href) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      globalThis.open(href, '_blank', 'noopener,noreferrer');
+                    }
+                  }
+                }}
+                onMouseDown={(e) => {
+                  // Prevent contentEditable from taking focus when clicking links
+                  const target = e.target as HTMLElement;
+                  if (target.tagName === 'A' || target.closest('a')) {
+                    e.stopPropagation();
+                  }
+                }}
+                onBlur={(e) => {
+                  // Force immediate save on blur (clear timeout and save)
+                  const timeout = notesSaveTimeouts.current.get(task.id);
+                  if (timeout) {
+                    clearTimeout(timeout);
+                    notesSaveTimeouts.current.delete(task.id);
+                  }
+                  
+                  // Convert any remaining URLs to links before saving
+                  convertUrlsToLinks(e.currentTarget);
+                  
+                  // Save HTML content (preserves links and formatting)
+                  const value = e.currentTarget.innerHTML || "";
+                  // Also get plain text for comparison
+                  const plainText = e.currentTarget.innerText || e.currentTarget.textContent || "";
+                  const currentNotes = task.notes ?? "";
+                  
+                  // Save HTML but compare with plain text to avoid unnecessary saves
+                  setPendingSaveNotes(prev => {
+                    const next = new Set(prev);
+                    next.delete(task.id);
+                    return next;
+                  });
+                  
+                  // Only save if content has changed
+                  if (plainText === currentNotes) {
+                    return;
+                  }
+                  
+                  // Save HTML content to preserve links
+                  saveNotes(task.id, value);
+                }}
+                className="min-h-[120px] max-h-[300px] overflow-y-auto resize-y text-sm rounded-md border border-input bg-background px-3 py-2 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 whitespace-pre-wrap break-words notes-editor"
+                style={{ 
+                  minHeight: '120px',
+                  maxHeight: '300px',
+                }}
+                data-placeholder="Add notes, reminders, or context for this task..."
+              />
+              <style dangerouslySetInnerHTML={{ __html: `
+                .notes-editor[data-placeholder]:empty:before {
+                  content: attr(data-placeholder);
+                  color: hsl(var(--muted-foreground));
+                  pointer-events: none;
+                }
+              `}} />
+              <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2">
+                  {(() => {
+                    if (isSaving || isPendingSave) {
+                      return (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <span>Saving...</span>
+                        </>
+                      );
+                    }
+                    if (lastEdited) {
+                      return (
+                        <>
+                          <Check className="h-3 w-3 text-green-600" />
+                          <span>Saved • Last edited: {formatRelativeTime(lastEdited)}</span>
+                        </>
+                      );
+                    }
+                    if (hasNotes) {
+                      return <span>Saved</span>;
+                    }
+                    return null;
+                  })()}
+                </div>
+                <span>{characterCount} {characterCount === 1 ? 'character' : 'characters'}</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          // Collapsed state - always show button
+          <button
+            type="button"
+            onClick={() => {
+              setExpandedNotes(prev => new Set(prev).add(task.id));
+              setEditingNotes(prev => {
+                const next = new Map(prev);
+                next.set(task.id, task.notes ?? "");
+                return next;
+              });
+            }}
+            className={`flex items-center gap-1.5 text-xs transition-colors ${
+              hasNotes 
+                ? "text-foreground hover:text-primary" 
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <StickyNote className={`h-3.5 w-3.5 ${hasNotes ? "text-primary" : "text-muted-foreground"}`} />
+            <span>{hasNotes ? `Notes: "${notesPreview}"` : "Add notes"}</span>
+          </button>
+        )}
+      </div>
+    );
+  };
 
   // Helper: Render subtask list items with drag and drop
   const renderSubtaskList = (task: Task) => {
@@ -1629,8 +2358,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     // Check if any subtask is being edited - if so, disable drag for that task's list
     const hasEditingSubtask = task.subtasks.some(
       (st) => 
-        (editingSubtaskText?.taskId === task.id && editingSubtaskText?.subtaskId === st.id) ||
-        (editingSubtaskDetails?.taskId === task.id && editingSubtaskDetails?.subtaskId === st.id)
+        (editingSubtaskText?.taskId === task.id && editingSubtaskText?.subtaskId === st.id)
     );
     
     return (
@@ -1652,16 +2380,11 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
                 task={task}
                 index={index}
                 editingSubtaskText={editingSubtaskText}
-                editingSubtaskDetails={editingSubtaskDetails}
                 setEditingSubtaskText={setEditingSubtaskText}
-                setEditingSubtaskDetails={setEditingSubtaskDetails}
                 toggleSubtask={toggleSubtask}
                 saveSubtaskEdit={saveSubtaskEdit}
                 cancelSubtaskEdit={cancelSubtaskEdit}
                 startEditingSubtask={startEditingSubtask}
-                startEditingSubtaskDetails={startEditingSubtaskDetails}
-                saveSubtaskDetails={saveSubtaskDetails}
-                cancelSubtaskDetailsEdit={cancelSubtaskDetailsEdit}
                 deleteSubtask={deleteSubtask}
               />
             ))}
@@ -1711,46 +2434,75 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
 
   // Helper: Render add checklist buttons
   const renderAddChecklistButtons = (task: Task) => (
-    <div className="mt-2 ml-8 flex items-center gap-2">
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-6 text-xs"
-        onClick={() => {
-          setEditingSubtask({ taskId: task.id, subtaskId: null });
-          setNewSubtaskTitle("");
-          setExpandedSubtasks((prev) => {
-            const next = new Set(prev);
-            next.add(task.id);
-            return next;
-          });
-        }}
-      >
-        <Plus className="h-3 w-3 mr-1" />
-        Add checklist
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-6 text-xs"
-        onClick={() => handleGenerateSubtasks(task)}
-        disabled={generateSubtasks.isPending}
-      >
-        {generateSubtasks.isPending ? "Generating..." : (
-          <>
-            <span className="mr-1.5">✨</span>
-            <span>AI generate</span>
-          </>
-        )}
-      </Button>
+    <div className="flex items-center gap-2">
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                setEditingSubtask({ taskId: task.id, subtaskId: null });
+                setNewSubtaskTitle("");
+                setExpandedSubtasks((prev) => {
+                  const next = new Set(prev);
+                  next.add(task.id);
+                  return next;
+                });
+              }}
+            >
+              <Plus className="h-3.5 w-3.5 mr-1.5" />
+              Add Checklist
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Manually add checklist items</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => handleGenerateSubtasks(task)}
+              disabled={generateSubtasks.isPending}
+            >
+              {generateSubtasks.isPending ? "Generating..." : (
+                <>
+                  <span className="mr-1">✨</span>
+                  <span>AI Generate Checklist</span>
+                </>
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>AI will generate subtasks based on this task</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 
   // Helper: Render expanded subtasks content
   const renderExpandedSubtasks = (task: Task, isEditingThis: boolean) => {
     if (!expandedSubtasks.has(task.id) && !isEditingThis) return null;
+    
+    const progress = task.subtasks && task.subtasks.length > 0 
+      ? getSubtaskProgress(task) 
+      : { completed: 0, total: 0, percent: 0 };
+    
     return (
       <div className="mt-2 space-y-1.5">
+        {/* Progress bar */}
+        {progress.total > 0 && (
+          <div className="space-y-1">
+            <Progress value={progress.percent} className="h-1.5" />
+          </div>
+        )}
         {renderSubtaskList(task)}
         {renderSubtaskInput(task.id)}
         {!isEditingThis && (
@@ -1767,57 +2519,35 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
               <Plus className="h-3 w-3 mr-1" />
               Add subtask
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 text-xs"
-              onClick={() => handleAddMoreSubtasks(task)}
-              disabled={generateSubtasks.isPending}
-            >
-              {generateSubtasks.isPending ? "..." : "✨ AI add more"}
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-xs"
+                    onClick={() => handleAddMoreSubtasks(task)}
+                    disabled={generateSubtasks.isPending}
+                  >
+                    {generateSubtasks.isPending ? "Generating..." : (
+                      <>
+                        <span className="mr-1">✨</span>
+                        <span>AI Add More</span>
+                      </>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>AI will generate additional subtasks</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         )}
       </div>
     );
   };
 
-  // Helper: Calculate total estimated minutes for subtasks
-  const getTotalEstimatedMinutes = (subtasks: Subtask[] | null | undefined): number => {
-    if (!subtasks) return 0;
-    return subtasks.reduce((sum, st) => sum + (st.estimated_minutes ?? 0), 0);
-  };
-
-  // Helper: Render subtasks header
-  const renderSubtasksHeader = (task: Task, progress: { completed: number; total: number; percent: number }) => {
-    const isExpanded = expandedSubtasks.has(task.id);
-    const progressText = progress.total > 0
-      ? `${progress.completed}/${progress.total} subtasks (${progress.percent}%)`
-      : "Subtasks";
-    const totalEstimatedMinutes = getTotalEstimatedMinutes(task.subtasks);
-
-    return (
-      <div className="space-y-1.5">
-        <button
-          onClick={() => toggleSubtasks(task.id)}
-          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
-        >
-          {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          <span className="flex-1 text-left">{progressText}</span>
-          {totalEstimatedMinutes > 0 && (
-            <span className="text-[10px] text-muted-foreground">
-              {formatTimer(totalEstimatedMinutes)} total
-            </span>
-          )}
-        </button>
-        {isExpanded && (
-          <div className="space-y-1">
-            <Progress value={progress.percent} className="h-1.5" />
-          </div>
-        )}
-      </div>
-    );
-  };
 
   // Helper: Render subtasks section
   const renderSubtasksSection = (task: Task) => {
@@ -1829,14 +2559,29 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     }
 
     const progress = hasSubtasks ? getSubtaskProgress(task) : { completed: 0, total: 0, percent: 0 };
+    const isExpanded = expandedSubtasks.has(task.id);
     
     return (
-      <div className="mt-2 ml-8 border-l-2 border-border/40 pl-3">
-        {hasSubtasks ? renderSubtasksHeader(task, progress) : (
-          <span className="text-xs text-muted-foreground">Checklist</span>
-        )}
-        {renderExpandedSubtasks(task, isEditingThis)}
-      </div>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={() => toggleSubtasks(task.id)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+            >
+              {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <span>
+                {progress.total > 0
+                  ? `${progress.completed}/${progress.total} subtasks`
+                  : "Checklist"}
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{isExpanded ? "Collapse checklist" : "Expand checklist"}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     );
   };
 
@@ -1886,12 +2631,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
             
             // Helper to start Focus Mode (called after Quick Track time is saved)
             const startFocusMode = () => {
-              const tempSession = createSessionFromTask(task);
-              startSession(tempSession, task, taskSubject || null, quickTrackTimeMs, quickTrackStartTime);
-              updateTask.mutate(
-                { id: task.id, payload: { status: "in_progress" } },
-                { onSuccess: () => toast({ title: "Focus session started", description: "Entering focus mode..." }) }
-              );
+              startFocusModeForTask(task, taskSubject || null, quickTrackTimeMs, quickTrackStartTime);
             };
             
             // If Quick Track is active, stop it first and wait for mutation to complete
@@ -2033,38 +2773,181 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   const renderFullTaskCard = (task: Task) => {
     const subject = task.subject_id ? subjectMap.get(task.subject_id) : undefined;
     const isEditing = editId === task.id;
+    const urgency = getTaskUrgency(task);
+    
     return (
       <div
         key={task.id}
-        className="flex items-start gap-3 rounded-xl border-l-4 border-l-blue-400 border border-border/60 bg-white/80 px-4 py-3 shadow-sm hover:shadow-md transition-shadow"
+        className={`group rounded-lg border border-border/40 shadow-sm hover:border-border/60 hover:shadow transition-all ${urgency.cardBgClass || "bg-card"} ${urgency.borderClass}`}
       >
-        <Checkbox
-          checked={task.is_completed}
-          onCheckedChange={(checked) => handleTaskCompletion(task, checked as boolean)}
-          className="mt-0.5 shrink-0"
-        />
-        <div className="flex-1 min-w-0">
-          {isEditing ? (
-            <div className="space-y-2">
-              {renderTaskTitle(task, isEditing)}
-              {renderEditingForm(task)}
-            </div>
-          ) : (
-            <>
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  {renderTaskTitle(task, isEditing)}
-                  <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground items-center">
-                    {renderTaskDisplay(task, subject)}
+        <div className="flex items-start gap-3 px-4 py-3">
+          <Checkbox
+            checked={task.is_completed}
+            onCheckedChange={(checked) => handleTaskCompletion(task, checked as boolean)}
+            className="mt-0.5 shrink-0"
+          />
+          <div className="flex-1 min-w-0">
+            {isEditing ? (
+              <div className="space-y-3">
+                {renderTaskTitle(task, isEditing)}
+                {renderEditingForm(task)}
+              </div>
+            ) : (
+              <>
+                {/* Top row: Title and actions */}
+                <div className="flex items-start justify-between gap-4 mb-2">
+                  <div className="flex-1 min-w-0">
+                    {renderTaskTitle(task, isEditing)}
+                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 opacity-60 group-hover:opacity-100 transition-opacity -mt-1"
+                        aria-label="More actions"
+                      >
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      {task.recurring_template_id && !task.is_recurring_template && (
+                        <>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              setSelectedInstanceForSeries(task);
+                              setManageSeriesOpen(true);
+                            }}
+                          >
+                            <Settings className="h-4 w-4 mr-2" />
+                            Manage Series
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                        </>
+                      )}
+                      {getSessionCount(task.id) > 0 && (
+                        <>
+                          <DropdownMenuItem onClick={() => router.push("/schedule")}>
+                            <ExternalLink className="h-4 w-4 mr-2" />
+                            View in Schedule
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                        </>
+                      )}
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setEditId(task.id);
+                          setDraft({
+                            ...task,
+                            deadline: task.deadline || undefined,
+                          });
+                          if (task.deadline) {
+                            let deadlineDate: Date;
+                            if (task.deadline.includes('Z') || task.deadline.includes('+') || task.deadline.includes('-', 10)) {
+                              deadlineDate = new Date(task.deadline);
+                            } else {
+                              deadlineDate = new Date(task.deadline + 'Z');
+                            }
+                            const hours = deadlineDate.getUTCHours();
+                            const minutes = deadlineDate.getUTCMinutes();
+                            const hasTime = !(hours === 23 && minutes === 59);
+                            if (hasTime) {
+                              const timeString = deadlineDate.toLocaleTimeString('en-US', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                hour12: false
+                              });
+                              setEditDeadlineTime(prev => {
+                                const next = new Map(prev);
+                                next.set(task.id, { useTime: true, time: timeString });
+                                return next;
+                              });
+                            }
+                          }
+                        }}
+                      >
+                        <Pencil className="h-4 w-4 mr-2" />
+                        Edit Task
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() =>
+                          deleteTask.mutate(task.id, {
+                            onSuccess: () => toast({ title: "Task removed" })
+                          })
+                        }
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete Task
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                
+                {/* Metadata row */}
+                {renderTaskDisplay(task, subject)}
+                
+                {/* Actions row */}
+                <div className="flex items-center justify-between gap-3 mt-3 pt-2 border-t border-border/30">
+                  <div className="flex items-center gap-2">
+                    {task.status !== "completed" && (
+                      <StartTrackingButton
+                        task={task}
+                        subject={subject}
+                        variant={task.status === "in_progress" ? "outline" : "default"}
+                        size="sm"
+                        className="h-7 text-xs"
+                        onFocusSessionStart={() => {
+                          const taskSubject = task.subject_id ? subjects.find((s) => s.id === task.subject_id) : null;
+                          const quickTrackStartTime = isQuickTrackActive(task.id) ? getStartTime(task.id) : null;
+                          const quickTrackTimeMs = isQuickTrackActive(task.id)
+                            ? getElapsedTime(task.id) * 60 * 1000
+                            : 0;
+                          const startFocusMode = () => {
+                            startFocusModeForTask(task, taskSubject || null, quickTrackTimeMs, quickTrackStartTime);
+                          };
+                          if (isQuickTrackActive(task.id)) {
+                            const elapsed = stopQuickTrack(task.id, true);
+                            const currentTimer = task.timer_minutes_spent ?? 0;
+                            updateTask.mutate(
+                              {
+                                id: task.id,
+                                payload: {
+                                  timer_minutes_spent: currentTimer + elapsed,
+                                  status: "in_progress",
+                                },
+                              },
+                              {
+                                onSuccess: () => startFocusMode(),
+                                onError: () => {
+                                  toast({
+                                    variant: "destructive",
+                                    title: "Failed to save Quick Track time",
+                                    description: "Could not convert to Focus Mode. Please try again.",
+                                  });
+                                },
+                              }
+                            );
+                          } else {
+                            startFocusMode();
+                          }
+                        }}
+                      />
+                    )}
+                    {renderSubtasksSection(task)}
                   </div>
                 </div>
-                <div className="shrink-0">
-                  {renderTaskActions(task)}
-                </div>
-              </div>
-              {renderSubtasksSection(task)}
-            </>
-          )}
+                
+                {/* Expanded subtasks */}
+                {expandedSubtasks.has(task.id) && (task.subtasks && task.subtasks.length > 0 || editingSubtask?.taskId === task.id) && (
+                  <div className="mt-3 pt-3 border-t border-border/30">
+                    {renderExpandedSubtasks(task, editingSubtask?.taskId === task.id)}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     );

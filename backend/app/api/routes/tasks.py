@@ -1,3 +1,5 @@
+# check issue with task completion(auto or manual e
+# tc)
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import logging
@@ -125,6 +127,33 @@ def list_tasks(
         logger.warning(f"Error during orphaned instance cleanup for user {current_user.id}: {e}")
         db.rollback()
     
+    # Automatically generate recurring task instances to ensure they appear ahead of time
+    # This ensures instances are always generated as time passes, not just on creation/completion
+    try:
+        recurring_templates = (
+            db.query(Task)
+            .filter(
+                Task.user_id == current_user.id,
+                Task.is_recurring_template.is_(True),
+                Task.recurrence_pattern.isnot(None),
+            )
+            .all()
+        )
+        
+        for template in recurring_templates:
+            try:
+                # Generate instances based on the template's advance_days setting
+                # This will generate instances up to advance_days + buffer days ahead
+                recurring_tasks.generate_recurring_instances(db, template, weeks_ahead=1, force_regenerate=False)
+            except Exception as e:
+                # Log but don't fail - individual template failures shouldn't break the whole request
+                logger.warning(f"Error generating instances for recurring template {template.id}: {e}")
+                db.rollback()
+    except Exception as e:
+        # Log error but don't fail the request
+        logger.warning(f"Error during recurring instance generation for user {current_user.id}: {e}")
+        db.rollback()
+    
     tasks = (
         db.query(Task)
         .filter(Task.user_id == current_user.id)
@@ -185,10 +214,10 @@ def create_task(
         db.refresh(task)
         
         # If this is a recurring template, generate initial instances
-        # Generate 2 weeks ahead by default (reduces clutter, instances auto-generate on completion)
+        # Generate 1 week ahead by default (reduces clutter, instances auto-generate on completion)
         if is_recurring and recurrence_pattern:
             try:
-                recurring_tasks.generate_recurring_instances(db, task, weeks_ahead=2)
+                recurring_tasks.generate_recurring_instances(db, task, weeks_ahead=1)
                 # Clear deadline from template after generating instances
                 # (templates shouldn't have deadlines - only instances do)
                 task.deadline = None
@@ -270,6 +299,12 @@ def _sync_is_completed_with_status(task: Task, payload: TaskUpdate, fields_set: 
             # Clear prevent_auto_completion when user manually marks complete
             # This allows auto-completion to work again if needed
             task.prevent_auto_completion = False
+            # If user manually completes a task when time is below estimate,
+            # set prevent_auto_completion to prevent auto-uncompletion
+            # (This marks it as a manual completion that should be respected)
+            total_time = task.total_minutes_spent
+            if total_time < task.estimated_minutes:
+                task.prevent_auto_completion = True
         else:
             # payload.is_completed is False - unmark as complete
             # Only change status if it's currently COMPLETED
@@ -300,6 +335,12 @@ def _sync_status_with_is_completed(
             task.completed_at = datetime.now(timezone.utc)
         # Clear prevent_auto_completion when user manually marks complete
         task.prevent_auto_completion = False
+        # If user manually completes a task when time is below estimate,
+        # set prevent_auto_completion to prevent auto-uncompletion
+        # (This marks it as a manual completion that should be respected)
+        total_time = task.total_minutes_spent
+        if total_time < task.estimated_minutes:
+            task.prevent_auto_completion = True
         if task.recurring_template_id and not task.is_recurring_template:
             try:
                 recurring_tasks.generate_next_instance_on_completion(db, task)
@@ -340,7 +381,7 @@ def _handle_recurrence_pattern_update(
     
     # Generate new instances if pattern exists
     if new_pattern:
-        recurring_tasks.generate_recurring_instances(db, task, weeks_ahead=2, force_regenerate=False)
+        recurring_tasks.generate_recurring_instances(db, task, weeks_ahead=1, force_regenerate=False)
 
 
 def _handle_making_recurring(
@@ -349,7 +390,7 @@ def _handle_making_recurring(
     """Handle making a task recurring for the first time."""
     if 'is_recurring_template' in fields_set and task.is_recurring_template and task.recurrence_pattern:
         if not old_pattern:
-            recurring_tasks.generate_recurring_instances(db, task, weeks_ahead=2, force_regenerate=False)
+            recurring_tasks.generate_recurring_instances(db, task, weeks_ahead=1, force_regenerate=False)
 
 
 @router.patch("/{task_id}", response_model=TaskPublic)
@@ -370,6 +411,16 @@ def update_task(
         _apply_field_updates(task, update_data, fields_set, payload)
         _sync_is_completed_with_status(task, payload, fields_set)
         _sync_status_with_is_completed(task, payload, fields_set, db)
+        
+        # Check for auto-completion when timer_minutes_spent is updated
+        # This ensures tasks auto-complete when timer time pushes total over estimate
+        if 'timer_minutes_spent' in fields_set:
+            # Import here to avoid circular dependency
+            from app.api.routes.schedule import _update_task_completion_status
+            total_time = task.total_minutes_spent
+            _update_task_completion_status(db, task, total_time, task.estimated_minutes)
+            # Refresh task to get updated completion status
+            db.refresh(task)
         
         # Handle removing recurrence (check old value since field may have been updated)
         if 'is_recurring_template' in fields_set and not task.is_recurring_template and old_is_recurring_template:
@@ -429,8 +480,7 @@ def _convert_to_subtasks(subtasks_data: list[dict], task_id: int) -> list[Subtas
             subtask = Subtask(
                 id=f"ai-{task_id}-{idx}",
                 title=st_data.get("title", "").strip(),
-                completed=False,
-                estimated_minutes=st_data.get("estimated_minutes")
+                completed=False
             )
             if subtask.title:
                 subtasks.append(subtask)
@@ -458,8 +508,7 @@ def _generate_fallback_subtasks(task: Task, task_id: int) -> list[Subtask]:
         Subtask(
             id=f"fallback-{task_id}-{idx}",
             title=part,
-            completed=False,
-            estimated_minutes=task.estimated_minutes // len(parts) if task.estimated_minutes else None
+            completed=False
         )
         for idx, part in enumerate(parts[:5])
     ]
@@ -479,10 +528,9 @@ def generate_subtasks(
 Task: {task.title}
 Description: {task.description or "No description provided"}
 Subject: {subject_name}
-Estimated time: {task.estimated_minutes} minutes
 
-Return ONLY a JSON array of subtasks, each with: {{"title": "subtask name", "estimated_minutes": number}}
-Example: [{{"title": "Research topic", "estimated_minutes": 30}}, {{"title": "Create outline", "estimated_minutes": 20}}]
+Return ONLY a JSON array of subtasks, each with: {{"title": "subtask name"}}
+Example: [{{"title": "Research topic"}}, {{"title": "Create outline"}}]
 Do not include any other text, just the JSON array."""
     
     try:
@@ -506,7 +554,7 @@ Do not include any other text, just the JSON array."""
 @router.post("/{task_id}/generate-instances", response_model=list[TaskPublic])
 def generate_recurring_instances(
     task_id: int,
-    weeks_ahead: int = 4,
+    weeks_ahead: int = 1,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> list[TaskPublic]:

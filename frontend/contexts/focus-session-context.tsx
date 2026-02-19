@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type { StudySession, Task, Subject } from "@/lib/types";
+import { startSession as startSessionApi } from "@/features/schedule/api";
 
 interface FocusSessionState {
   session: StudySession | null;
@@ -127,6 +128,7 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
     
     const remainingSeconds = calculateRemainingSeconds(sessionDurationMs, startTime, null);
 
+    // Optimistically start the session locally (don't block UI)
     setState({
       session,
       task,
@@ -145,6 +147,16 @@ export function FocusSessionProvider({ children }: { readonly children: React.Re
       pomodoroDurationMs: 0,
       pomodoroRemainingSeconds: 0,
     });
+
+    // Mark session as IN_PROGRESS in background (protects from deletion on regeneration)
+    // Only call API for real sessions (positive IDs from database)
+    if (session.id > 0) {
+      startSessionApi(session.id).catch((error) => {
+        // Non-blocking: log error but don't interrupt user's focus session
+        // Session will still work locally, just won't be protected on regeneration
+        console.warn("Failed to mark session as in_progress:", error);
+      });
+    }
   }, [calculateRemainingSeconds]);
 
   const pauseSession = useCallback(() => {

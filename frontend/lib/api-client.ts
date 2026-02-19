@@ -21,6 +21,16 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    // Don't retry refresh endpoint failures to avoid infinite loops
+    if (error.config?.url?.includes("/auth/refresh")) {
+      window.localStorage.removeItem("ssc.accessToken");
+      window.localStorage.removeItem("ssc.refreshToken");
+      if (typeof window !== "undefined" && !window.location.pathname.includes("/login")) {
+        window.location.href = "/login";
+      }
+      return Promise.reject(error);
+    }
+
     if (
       error.response?.status === 401 &&
       typeof window !== "undefined" &&
@@ -41,8 +51,17 @@ api.interceptors.response.use(
           error.config._retry = true;
           return api(error.config);
         } catch (refreshError) {
+          // Clear tokens and redirect to login on refresh failure
           window.localStorage.removeItem("ssc.accessToken");
           window.localStorage.removeItem("ssc.refreshToken");
+          if (!window.location.pathname.includes("/login")) {
+            window.location.href = "/login";
+          }
+          return Promise.reject(refreshError);
+        }
+      } else {
+        // No refresh token available, redirect to login
+        if (!window.location.pathname.includes("/login")) {
           window.location.href = "/login";
         }
       }

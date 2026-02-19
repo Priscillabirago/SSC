@@ -255,14 +255,32 @@ def get_overview(
     streak = _calculate_streak_for_overview(streak_sessions, current_user.timezone)
     
     # Calculate weekly hours completed (from completed and partial sessions)
-    # Use end_time filter to count work that was actually completed this week
-    # (regardless of when it started - this measures "work done this week")
-    # Partial sessions count toward hours/streak but not adherence
+    # Use calendar week: Monday 00:00:00 to now (in user's timezone)
+    # This resets every Monday, making it more intuitive for students
+    try:
+        user_tz = ZoneInfo(current_user.timezone)
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+    
+    # Get current time in user's timezone
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone(user_tz)
+    today_local = now_local.date()
+    
+    # Calculate days to subtract to get to Monday (weekday: Monday=0, Sunday=6)
+    days_since_monday = today_local.weekday()
+    monday_date = today_local - timedelta(days=days_since_monday)
+    
+    # Get Monday 00:00:00 in user's timezone, then convert to UTC
+    monday_start_local = datetime.combine(monday_date, datetime.min.time()).replace(tzinfo=user_tz)
+    week_start_utc = monday_start_local.astimezone(timezone.utc)
+    
+    # Count sessions that ended since Monday 00:00:00 (this week)
     weekly_sessions = (
         db.query(StudySession)
         .filter(
             StudySession.user_id == current_user.id,
-            StudySession.end_time >= seven_days_ago,  # Count sessions that ended this week
+            StudySession.end_time >= week_start_utc,  # Count sessions that ended this week (since Monday)
             StudySession.status.in_([SessionStatus.COMPLETED, SessionStatus.PARTIAL])
         )
         .all()

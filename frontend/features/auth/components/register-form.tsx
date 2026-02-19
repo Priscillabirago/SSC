@@ -11,57 +11,73 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useRegister } from "@/features/auth/hooks";
 
 const timezones = [
-  { value: "UTC", label: "UTC (Coordinated Universal Time)" },
+  { value: "UTC", label: "UTC" },
   // Americas
-  { value: "America/New_York", label: "Eastern Time (ET)" },
-  { value: "America/Chicago", label: "Central Time (CT)" },
-  { value: "America/Denver", label: "Mountain Time (MT)" },
-  { value: "America/Los_Angeles", label: "Pacific Time (PT)" },
-  { value: "America/Phoenix", label: "Mountain Time - Arizona (MST)" },
-  { value: "America/Anchorage", label: "Alaska Time (AKT)" },
-  { value: "America/Toronto", label: "Eastern Time - Toronto (ET)" },
-  { value: "America/Vancouver", label: "Pacific Time - Vancouver (PT)" },
-  { value: "America/Mexico_City", label: "Central Time - Mexico (CST)" },
-  { value: "America/Sao_Paulo", label: "Brasília Time (BRT)" },
-  { value: "America/Buenos_Aires", label: "Argentina Time (ART)" },
+  { value: "America/New_York", label: "ET" },
+  { value: "America/Chicago", label: "CT" },
+  { value: "America/Denver", label: "MT" },
+  { value: "America/Los_Angeles", label: "PT" },
+  { value: "America/Phoenix", label: "MST (AZ)" },
+  { value: "America/Anchorage", label: "AKT" },
+  { value: "America/Toronto", label: "ET (Toronto)" },
+  { value: "America/Vancouver", label: "PT (Vancouver)" },
+  { value: "America/Mexico_City", label: "CST (MX)" },
+  { value: "America/Sao_Paulo", label: "BRT" },
+  { value: "America/Buenos_Aires", label: "ART" },
   // Europe
-  { value: "Europe/London", label: "London (GMT/BST)" },
-  { value: "Europe/Paris", label: "Central European Time (CET)" },
-  { value: "Europe/Berlin", label: "Central European Time - Berlin (CET)" },
-  { value: "Europe/Rome", label: "Central European Time - Rome (CET)" },
-  { value: "Europe/Madrid", label: "Central European Time - Madrid (CET)" },
-  { value: "Europe/Amsterdam", label: "Central European Time - Amsterdam (CET)" },
-  { value: "Europe/Stockholm", label: "Central European Time - Stockholm (CET)" },
-  { value: "Europe/Zurich", label: "Central European Time - Zurich (CET)" },
-  { value: "Europe/Vienna", label: "Central European Time - Vienna (CET)" },
+  { value: "Europe/London", label: "UK (GMT/BST)" },
+  { value: "Europe/Paris", label: "CET (Paris)" },
+  { value: "Europe/Berlin", label: "CET (Berlin)" },
+  { value: "Europe/Rome", label: "CET (Rome)" },
+  { value: "Europe/Madrid", label: "CET (Madrid)" },
+  { value: "Europe/Amsterdam", label: "CET (AMS)" },
+  { value: "Europe/Stockholm", label: "CET (STO)" },
+  { value: "Europe/Zurich", label: "CET (ZRH)" },
+  { value: "Europe/Vienna", label: "CET (VIE)" },
   { value: "Europe/Dublin", label: "Dublin (GMT/IST)" },
-  { value: "Europe/Lisbon", label: "Western European Time - Lisbon (WET)" },
-  { value: "Europe/Athens", label: "Eastern European Time - Athens (EET)" },
-  { value: "Europe/Moscow", label: "Moscow Time (MSK)" },
+  { value: "Europe/Lisbon", label: "Lisbon (WET)" },
+  { value: "Europe/Athens", label: "EET (Athens)" },
+  { value: "Europe/Moscow", label: "MSK" },
   // Asia
-  { value: "Asia/Dubai", label: "Gulf Standard Time (GST)" },
-  { value: "Asia/Karachi", label: "Pakistan Standard Time (PKT)" },
-  { value: "Asia/Kolkata", label: "India Standard Time (IST)" },
-  { value: "Asia/Dhaka", label: "Bangladesh Standard Time (BST)" },
-  { value: "Asia/Bangkok", label: "Indochina Time (ICT)" },
-  { value: "Asia/Singapore", label: "Singapore Time (SGT)" },
-  { value: "Asia/Hong_Kong", label: "Hong Kong Time (HKT)" },
-  { value: "Asia/Shanghai", label: "China Standard Time (CST)" },
-  { value: "Asia/Seoul", label: "Korea Standard Time (KST)" },
-  { value: "Asia/Tokyo", label: "Japan Standard Time (JST)" },
-  { value: "Asia/Manila", label: "Philippine Time (PHT)" },
-  { value: "Asia/Jakarta", label: "Western Indonesia Time (WIB)" },
+  { value: "Asia/Dubai", label: "GST" },
+  { value: "Asia/Karachi", label: "PKT" },
+  { value: "Asia/Kolkata", label: "IST" },
+  { value: "Asia/Dhaka", label: "BST" },
+  { value: "Asia/Bangkok", label: "ICT" },
+  { value: "Asia/Singapore", label: "SGT" },
+  { value: "Asia/Hong_Kong", label: "HKT" },
+  { value: "Asia/Shanghai", label: "CST (CN)" },
+  { value: "Asia/Seoul", label: "KST" },
+  { value: "Asia/Tokyo", label: "JST" },
+  { value: "Asia/Manila", label: "PHT" },
+  { value: "Asia/Jakarta", label: "WIB" },
   // Oceania
-  { value: "Australia/Sydney", label: "Australian Eastern Time (AET)" },
-  { value: "Australia/Melbourne", label: "Australian Eastern Time - Melbourne (AET)" },
-  { value: "Australia/Brisbane", label: "Australian Eastern Time - Brisbane (AET)" },
-  { value: "Australia/Perth", label: "Australian Western Time (AWST)" },
-  { value: "Pacific/Auckland", label: "New Zealand Time (NZST)" },
+  { value: "Australia/Sydney", label: "AET (SYD)" },
+  { value: "Australia/Melbourne", label: "AET (MEL)" },
+  { value: "Australia/Brisbane", label: "AET (BNE)" },
+  { value: "Australia/Perth", label: "AWST" },
+  { value: "Pacific/Auckland", label: "NZST" },
   // Africa
-  { value: "Africa/Cairo", label: "Eastern European Time - Cairo (EET)" },
-  { value: "Africa/Johannesburg", label: "South Africa Standard Time (SAST)" },
-  { value: "Africa/Lagos", label: "West Africa Time (WAT)" },
+  { value: "Africa/Cairo", label: "EET (Cairo)" },
+  { value: "Africa/Johannesburg", label: "SAST" },
+  { value: "Africa/Lagos", label: "WAT" },
 ];
+
+const timezoneAliases: Record<string, string> = {
+  "Asia/Calcutta": "Asia/Kolkata",
+  "Asia/Katmandu": "Asia/Kathmandu",
+  "America/Argentina/Buenos_Aires": "America/Buenos_Aires",
+};
+
+function normalizeTimezone(tz?: string): string | null {
+  if (!tz) return null;
+  return timezoneAliases[tz] ?? tz;
+}
+
+function isSupportedTimezone(tz?: string): tz is string {
+  const normalized = normalizeTimezone(tz);
+  return Boolean(normalized && timezones.some((t) => t.value === normalized));
+}
 
 type PasswordStrength = "weak" | "medium" | "strong" | "";
 
@@ -149,9 +165,9 @@ function useRegisterFormState() {
   useEffect(() => {
     try {
       const detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const timezoneExists = timezones.some(tz => tz.value === detectedTimezone);
-      if (timezoneExists) {
-        setTimezone(detectedTimezone);
+      const normalized = normalizeTimezone(detectedTimezone);
+      if (isSupportedTimezone(normalized || undefined)) {
+        setTimezone(normalized!);
       }
     } catch (error) {
       // Fallback to UTC if detection fails - silently use default

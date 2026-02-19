@@ -185,11 +185,27 @@ def _calculate_start_date(
     template: Task,
     last_occurrence_date: datetime | None,
     normalize_to_utc: Callable[[datetime | None], datetime | None],
+    existing_instances: list[Task] | None = None,
 ) -> datetime | None:
-    """Calculate the start date for instance generation."""
+    """Calculate the start date for instance generation.
+    
+    Preserves the original deadline time by using the last instance's deadline
+    if template.deadline is None, instead of falling back to created_at.
+    """
     start_date = last_occurrence_date or template.deadline
     if not start_date:
-        start_date = template.created_at
+        # If no deadline and no last occurrence, try to use last instance's deadline time
+        # This preserves the original deadline time (e.g., 9:30pm) instead of using created_at
+        if existing_instances:
+            last_instance = max(
+                existing_instances,
+                key=lambda t: t.deadline or datetime.min.replace(tzinfo=timezone.utc)
+            )
+            if last_instance.deadline:
+                start_date = last_instance.deadline
+        # Final fallback to created_at if no instances exist
+        if not start_date:
+            start_date = template.created_at
     return normalize_to_utc(start_date)
 
 
@@ -261,7 +277,7 @@ def _generate_instances_loop(
 def generate_recurring_instances(
     db: Session,
     template: Task,
-    weeks_ahead: int = 4,
+    weeks_ahead: int = 1,
     force_regenerate: bool = False,
 ) -> list[Task]:
     """
@@ -291,7 +307,28 @@ def generate_recurring_instances(
         return dt.astimezone(timezone.utc)
     
     now = datetime.now(timezone.utc)
-    target_date = now + timedelta(weeks=weeks_ahead)
+    
+    # Respect advance_days setting: only generate instances that will appear soon
+    # advance_days controls when instances appear relative to their deadline
+    # - advance_days=0: instances appear on the deadline day (day of) → generate only if deadline is today or tomorrow
+    # - advance_days=1: instances appear 1 day before deadline → generate if deadline is within 2-3 days
+    # We generate instances with deadlines within (advance_days + buffer) days
+    advance_days = pattern.get("advance_days", 0)
+    if advance_days == 0:
+        # Day of: only generate instances with deadlines TODAY (end of today)
+        # This ensures tasks appear on the day of, not before
+        # Set to end of today (23:59:59) in UTC
+        today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        target_date = today_end
+    elif advance_days > 0:
+        # Advance notice: generate instances with deadlines within advance_days + 2 days buffer
+        # e.g., if advance_days=1, generate instances with deadlines within 3 days
+        buffer_days = 2
+        max_days_ahead = advance_days + buffer_days
+        target_date = now + timedelta(days=max_days_ahead)
+    else:
+        # Fallback: use weeks_ahead as before
+        target_date = now + timedelta(weeks=weeks_ahead)
     
     if end_date:
         end_date = normalize_to_utc(end_date)
@@ -309,7 +346,7 @@ def generate_recurring_instances(
     )
     
     last_occurrence_date = _get_last_occurrence_date(existing_instances)
-    start_date = _calculate_start_date(template, last_occurrence_date, normalize_to_utc)
+    start_date = _calculate_start_date(template, last_occurrence_date, normalize_to_utc, existing_instances)
     
     if not start_date:
         return []

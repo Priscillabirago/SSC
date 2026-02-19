@@ -67,15 +67,25 @@ def refresh_token(
     payload: auth_schema.RefreshRequest,
     db: Session = Depends(get_db),
 ) -> auth_schema.TokenPair:
+    if not payload.refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token is required",
+        )
     try:
         data = decode_token(payload.refresh_token)
         if data.get("type") != "refresh":
-            raise ValueError("Invalid refresh token")
+            raise ValueError("Invalid refresh token type")
         user_id = int(data["sub"])
-    except (ValueError, KeyError) as exc:
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token",
+            detail="Invalid or expired refresh token",
+        ) from exc
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token format",
         ) from exc
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -94,28 +104,15 @@ def forgot_password(
     payload: auth_schema.ForgotPasswordRequest,
     db: Session = Depends(get_db),  # noqa: B008
 ) -> dict[str, str]:
-    """Request password reset - generates a reset token and sends email.
+    """Request password reset - DISABLED.
     
-    Note: In production, this should send an email with the reset link.
-    For now, it returns a success message. The token can be retrieved
-    from logs in development or via email in production.
+    Password reset via email is currently disabled. 
+    Users can change their password from Settings when logged in.
     """
-    user = db.query(User).filter(User.email == payload.email).first()
-    if not user:
-        # Don't reveal if email exists for security
-        return {"message": "If that email exists, we've sent a password reset link."}
-    
-    # Generate reset token
-    reset_token = create_password_reset_token(user.id)
-    
-    # Note: Email sending can be added here for production
-    # In production, send email with link like: {frontend_url}/reset-password?token={reset_token}
-    # For local development, log the token to console
-    if get_settings().environment == "development":
-        print(f"Password reset token for {user.email}: {reset_token}")
-        print(f"Reset link: http://localhost:3000/reset-password?token={reset_token}")
-    
-    return {"message": "If that email exists, we've sent a password reset link."}
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Password reset via email is currently unavailable. Please contact support or use the change password feature in Settings if you are logged in.",
+    )
 
 
 @router.post("/reset-password-with-token")
@@ -123,30 +120,15 @@ def reset_password_with_token(
     payload: auth_schema.ResetPasswordWithTokenRequest,
     db: Session = Depends(get_db),  # noqa: B008
 ) -> dict[str, str]:
-    """Reset password using a token from email (when user is not logged in)."""
-    try:
-        data = decode_token(payload.token)
-        if data.get("type") != "password_reset":
-            raise ValueError("Invalid reset token")
-        user_id = int(data["sub"])
-    except (ValueError, KeyError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired reset token",
-        ) from exc
+    """Reset password using a token from email - DISABLED.
     
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-    
-    user.hashed_password = get_password_hash(payload.new_password)
-    db.add(user)
-    db.commit()
-    
-    return {"message": "Password reset successfully"}
+    Password reset via email is currently disabled.
+    Users can change their password from Settings when logged in.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Password reset via email is currently unavailable. Please contact support or use the change password feature in Settings if you are logged in.",
+    )
 
 
 @router.get("/me", response_model=UserPublic)

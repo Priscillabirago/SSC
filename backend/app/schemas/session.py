@@ -15,6 +15,7 @@ class StudySessionPublic(BaseModel):
     status: SessionStatus
     energy_level: str | None
     generated_by: str | None
+    is_pinned: bool = False
     focus: str | None = None
 
     class Config:
@@ -26,4 +27,14 @@ class StudySessionUpdate(BaseModel):
     notes: str | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
+    is_pinned: bool | None = None
+
+
+class StudySessionCreate(BaseModel):
+    """Schema for creating a manual session."""
+    task_id: int | None = None
+    subject_id: int | None = None
+    start_time: datetime
+    end_time: datetime
+    is_pinned: bool = True  # Manual sessions are pinned by default
 

@@ -17,6 +17,10 @@ export function useCreateTask() {
     mutationFn: (payload: Partial<Task>) => createTask(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["schedule", "workload-analysis"] });
+      // Invalidate analytics for immediate dashboard updates
+      queryClient.invalidateQueries({ queryKey: ["analytics", "overview"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics", "insights"] });
     }
   });
 }
@@ -28,6 +32,10 @@ export function useUpdateTask() {
       queryClient.setQueryData<Task[]>(["tasks"], (tasks) =>
         tasks?.map((task) => (task.id === data.id ? data : task))
       );
+      queryClient.invalidateQueries({ queryKey: ["schedule", "workload-analysis"] });
+      // Invalidate analytics for immediate dashboard updates
+      queryClient.invalidateQueries({ queryKey: ["analytics", "overview"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics", "insights"] });
     }
   });
 }
@@ -39,6 +47,10 @@ export function useDeleteTask() {
       queryClient.setQueryData<Task[]>(["tasks"], (tasks) =>
         tasks?.filter((task) => task.id !== taskId)
       );
+      queryClient.invalidateQueries({ queryKey: ["schedule", "workload-analysis"] });
+      // Invalidate analytics for immediate dashboard updates
+      queryClient.invalidateQueries({ queryKey: ["analytics", "overview"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics", "insights"] });
     }
   });
 }

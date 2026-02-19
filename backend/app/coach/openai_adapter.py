@@ -211,6 +211,7 @@ class OpenAICoachAdapter(CoachAdapter):
         """Build the prompt for session preparation."""
         task_title = session_context.get("task_title", "this task")
         task_description = session_context.get("task_description", "")
+        task_notes = session_context.get("task_notes", "")
         subtasks = session_context.get("subtasks", [])
         subject_name = session_context.get("subject_name", "")
         subject_difficulty = session_context.get("subject_difficulty", "")
@@ -224,6 +225,7 @@ class OpenAICoachAdapter(CoachAdapter):
 
 Task: {task_title}
 {f"Description: {task_description}" if task_description else ""}
+{f"Notes: {task_notes}" if task_notes else ""}
 {f"Subject: {subject_name} ({subject_difficulty} difficulty)" if subject_name else ""}
 Duration: {duration_minutes} minutes
 Time: {time_of_day}

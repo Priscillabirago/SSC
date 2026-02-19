@@ -81,6 +81,7 @@ class DailySummaryResponse(BaseModel):
     tone: Literal["positive", "neutral", "encouraging"]
     last_session_end: str | None = None  # ISO datetime when last session ended
     first_session_start: str | None = None  # ISO datetime when first session starts today
+    has_remaining_sessions: bool = False  # True if there are more PLANNED sessions today
     user_timezone: str = "UTC"  # User's timezone for frontend comparisons
 
 

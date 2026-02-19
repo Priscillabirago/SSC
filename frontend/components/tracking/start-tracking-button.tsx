@@ -15,6 +15,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useFocusSession } from "@/contexts/focus-session-context";
 import { useQuickTrack } from "@/contexts/quick-track-context";
 import { useUpdateTask } from "@/features/tasks/hooks";
+import { useSessions } from "@/features/schedule/hooks";
 import { toast } from "@/components/ui/use-toast";
 import type { Task, StudySession, Subject } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -43,6 +44,7 @@ export function StartTrackingButton({
   const { state: focusState, startSession } = useFocusSession();
   const { isActive: isQuickTrackActive, getElapsedTime, getStartTime, startQuickTrack, stopQuickTrack } = useQuickTrack();
   const updateTask = useUpdateTask();
+  const { data: sessions } = useSessions();
   const [open, setOpen] = useState(false);
   
   const activeQuickTrack = task ? isQuickTrackActive(task.id) : false;
@@ -69,9 +71,36 @@ export function StartTrackingButton({
     return `${hours}h${minsPart}`;
   };
 
+  // Helper: Check if there's an active scheduled session for this task
+  const getActiveSessionForTask = (taskId: number): StudySession | null => {
+    if (!sessions) return null;
+    const now = new Date();
+    return sessions.find((s) => {
+      if (s.task_id !== taskId) return false;
+      if (s.status !== "planned" && s.status !== "in_progress") return false;
+      const startTime = new Date(s.start_time);
+      const endTime = new Date(s.end_time);
+      return startTime <= now && now <= endTime;
+    }) || null;
+  };
+
   // Handle Quick Track start
   const handleQuickTrackStart = () => {
     if (task) {
+      // Check for overlapping scheduled session
+      const activeSession = getActiveSessionForTask(task.id);
+      if (activeSession) {
+        const startTime = new Date(activeSession.start_time);
+        const endTime = new Date(activeSession.end_time);
+        const timeStr = `${startTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} - ${endTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+        
+        toast({
+          title: "Scheduled session in progress",
+          description: `You have a session scheduled for ${timeStr}. Using Quick Track may cause double-counted time. Consider using Focus Mode instead.`,
+          duration: 8000,
+        });
+      }
+      
       startQuickTrack(task.id);
       updateTask.mutate(
         { id: task.id, payload: { status: "in_progress" } },

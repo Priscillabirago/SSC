@@ -45,6 +45,7 @@ class Task(Base):
     )
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)  # User notes for the task
     deadline = Column(DateTime, nullable=True)
     estimated_minutes = Column(Integer, nullable=False, default=60)
     actual_minutes_spent = Column(Integer, nullable=True, default=None)  # Session time only (calculated from sessions)

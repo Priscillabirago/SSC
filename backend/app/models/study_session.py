@@ -2,6 +2,7 @@ from datetime import datetime
 from enum import Enum as PyEnum
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Enum as SQLEnum,
@@ -16,6 +17,7 @@ from app.db.base import Base
 
 class SessionStatus(str, PyEnum):
     PLANNED = "planned"
+    IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     SKIPPED = "skipped"
     PARTIAL = "partial"
@@ -35,6 +37,7 @@ class StudySession(Base):
     status = Column(SQLEnum(SessionStatus), nullable=False, default=SessionStatus.PLANNED)
     energy_level = Column(String(16), nullable=True)
     generated_by = Column(String(64), nullable=True)  # scheduler, micro_plan, manual
+    is_pinned = Column(Boolean, nullable=False, default=False)  # Pinned sessions survive regeneration
     notes = Column(String(255), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(

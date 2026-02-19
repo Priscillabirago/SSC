@@ -1,9 +1,9 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { queryClient } from "@/lib/query-client";
-import type { StudySession, WeeklyPlan } from "@/lib/types";
+import type { StudySession, StudySessionCreate, WeeklyPlan } from "@/lib/types";
 
-import { analyzeSchedule, generateSchedule, getWorkloadAnalysis, listSessions, microPlan, prepareSession, updateSession } from "./api";
+import { analyzeSchedule, createSession, deleteSession, generateSchedule, getWorkloadAnalysis, listSessions, microPlan, pinSession, prepareSession, updateSession } from "./api";
 
 export function useSessions() {
   return useQuery({
@@ -29,12 +29,52 @@ export function useMicroPlan() {
 
 export function useUpdateSession() {
   return useMutation({
-    mutationFn: ({ sessionId, payload }: { sessionId: number; payload: { status?: StudySession["status"]; notes?: string; start_time?: string; end_time?: string } }) =>
+    mutationFn: ({ sessionId, payload }: { sessionId: number; payload: { status?: StudySession["status"]; notes?: string; start_time?: string; end_time?: string; is_pinned?: boolean } }) =>
       updateSession(sessionId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["schedule", "sessions"] });
       // Invalidate tasks query because session status changes update actual_minutes_spent
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["schedule", "workload-analysis"] });
+      // Invalidate analytics for immediate dashboard updates
+      queryClient.invalidateQueries({ queryKey: ["analytics", "overview"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics", "insights"] });
+    }
+  });
+}
+
+export function useCreateSession() {
+  return useMutation({
+    mutationFn: (payload: StudySessionCreate) => createSession(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["schedule", "sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["schedule", "workload-analysis"] });
+      // Invalidate analytics for immediate dashboard updates
+      queryClient.invalidateQueries({ queryKey: ["analytics", "overview"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics", "insights"] });
+    }
+  });
+}
+
+export function usePinSession() {
+  return useMutation({
+    mutationFn: ({ sessionId, isPinned }: { sessionId: number; isPinned: boolean }) =>
+      pinSession(sessionId, isPinned),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["schedule", "sessions"] });
+    }
+  });
+}
+
+export function useDeleteSession() {
+  return useMutation({
+    mutationFn: (sessionId: number) => deleteSession(sessionId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["schedule", "sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["schedule", "workload-analysis"] });
+      // Invalidate analytics for immediate dashboard updates
+      queryClient.invalidateQueries({ queryKey: ["analytics", "overview"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics", "insights"] });
     }
   });
 }

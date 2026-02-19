@@ -79,7 +79,7 @@ export function Topbar() {
               </button>
             ))}
           </div>
-          <Badge variant="outline" className="hidden sm:inline-flex">
+          <Badge variant="outline" className="hidden sm:inline-flex max-w-[160px] truncate">
             {profile?.timezone ?? "UTC"}
           </Badge>
           <Button variant="ghost" size="icon" onClick={logout} className="h-8 w-8 sm:h-10 sm:w-10">

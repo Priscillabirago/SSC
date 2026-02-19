@@ -20,6 +20,7 @@ def build_context_lines(context: dict[str, Any]) -> list[str]:
             priority = task.get("priority", "medium")
             subject = task.get("subject")
             estimated = task.get("estimated_minutes")
+            notes = task.get("notes")
             
             # Build task description
             parts = [title]
@@ -48,6 +49,9 @@ def build_context_lines(context: dict[str, Any]) -> list[str]:
                 parts.append(f"({hours:.1f}h)")
             
             task_entry = " ".join(parts)
+            # Add notes if they exist (for AI context)
+            if notes and notes.strip():
+                task_entry += f" [Notes: {notes[:100]}{'...' if len(notes) > 100 else ''}]"
             task_entries.append(task_entry)
             
             if priority == "critical" or (deadline and "OVERDUE" in task_entry or "due TODAY" in task_entry):

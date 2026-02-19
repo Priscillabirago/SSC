@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Loader2, RefreshCcw, Info, Sparkles, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,8 @@ import { WorkloadWarningsCard } from "@/features/schedule/components/workload-wa
 import { useAnalyzeSchedule, useGenerateSchedule, useSessions } from "@/features/schedule/hooks";
 import { toast } from "@/components/ui/use-toast";
 import type { WorkloadAnalysis } from "@/features/schedule/api";
+import type { StudySession } from "@/lib/types";
+import { compareSchedules, getScheduleDiffSummary, type ScheduleDiff } from "@/features/schedule/utils/schedule-diff";
 
 export function ScheduleView() {
   const [mounted, setMounted] = useState(false);
@@ -23,13 +25,30 @@ export function ScheduleView() {
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
   const [showExplanation, setShowExplanation] = useState(false);
   const [postGenAnalysis, setPostGenAnalysis] = useState<WorkloadAnalysis | null>(null);
+  const [scheduleDiff, setScheduleDiff] = useState<ScheduleDiff | null>(null);
+  const previousSessionsRef = useRef<StudySession[]>([]);
+  
   useEffect(() => setMounted(true), []);
 
   const { data: sessions, isLoading } = useSessions();
   const generate = useGenerateSchedule();
   const analyzeSchedule = useAnalyzeSchedule();
 
+  // Clear diff after 5 minutes (for visual badges)
+  useEffect(() => {
+    if (scheduleDiff) {
+      const timeout = setTimeout(() => {
+        setScheduleDiff(null);
+      }, 5 * 60 * 1000);
+      return () => clearTimeout(timeout);
+    }
+  }, [scheduleDiff]);
+
   const handleGenerate = () => {
+    // Store current sessions as "before" state
+    const beforeSessions = sessions || [];
+    previousSessionsRef.current = [...beforeSessions];
+    
     generate.mutate(useAiOptimization, {
       onSuccess: (response) => {
         // Capture AI explanation if present
@@ -53,6 +72,9 @@ export function ScheduleView() {
           }
         });
         
+        // Sessions will be updated via query invalidation
+        // Diff will be calculated in useEffect when sessions update
+        
         toast({ 
           title: "Schedule ready", 
           description: useAiOptimization 
@@ -64,6 +86,8 @@ export function ScheduleView() {
         setAiExplanation(null);
         setShowExplanation(false);
         setPostGenAnalysis(null);
+        setScheduleDiff(null);
+        previousSessionsRef.current = [];
         toast({
           variant: "destructive",
           title: "Unable to generate schedule",
@@ -73,9 +97,50 @@ export function ScheduleView() {
     });
   };
 
-  // Only render on client to prevent SSR mismatch
+  // Calculate diff when sessions update after regeneration
+  useEffect(() => {
+    // Only calculate diff if:
+    // 1. We have sessions data
+    // 2. We stored previous sessions (regeneration happened)
+    // 3. Generation is not pending (it completed)
+    // 4. Sessions actually changed (not just initial load)
+    if (
+      sessions && 
+      previousSessionsRef.current.length > 0 && 
+      !generate.isPending &&
+      !isLoading
+    ) {
+      const diff = compareSchedules(previousSessionsRef.current, sessions);
+      
+      // Only show diff if there are significant changes (>2 changes)
+      const totalChanges = diff.moved.length + diff.added.length + diff.removed.length;
+      if (totalChanges > 2) {
+        setScheduleDiff(diff);
+        const summary = getScheduleDiffSummary(diff);
+        if (summary) {
+          toast({
+            title: "Schedule updated",
+            description: summary,
+            duration: 5000,
+          });
+        }
+      } else {
+        setScheduleDiff(null);
+      }
+      
+      // Clear previous sessions after calculating diff
+      previousSessionsRef.current = [];
+    }
+  }, [sessions, generate.isPending, isLoading]);
+
+  // During SSR and initial hydration, render a consistent skeleton
+  // This prevents hydration mismatches that can block navigation
   if (!mounted) {
-    return <Skeleton className="h-96 w-full" />;
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-64 w-full" />
+      </div>
+    );
   }
 
   return (
@@ -202,12 +267,12 @@ export function ScheduleView() {
           </CardContent>
         </Card>
       )}
-      
+
       {isLoading || !sessions ? (
-        <Skeleton className="h-96 w-full" />
+        <Skeleton className="h-64 w-full" />
       ) : (
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-[1.3fr_0.7fr]">
-          <WeeklyTimeline sessions={sessions} />
+          <WeeklyTimeline sessions={sessions} scheduleDiff={scheduleDiff} />
           <div className="space-y-6">
             <QuickAddTaskWidget />
             <MicroPlanWidget />

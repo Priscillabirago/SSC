@@ -50,18 +50,22 @@ export function DailySummaryCard() {
     // Check if we should show before first session (morning)
     if (summary.first_session_start) {
       const firstSessionTime = new Date(summary.first_session_start).getTime();
-      // Show if it's before the first session starts (with 30 min buffer)
-      const buffer = 30 * 60 * 1000; // 30 minutes
-      if (nowTime < firstSessionTime - buffer) {
+      // Show until the first session actually starts - no time cutoff
+      // This way if someone has a late first session (e.g., 2pm), they'll still see
+      // the morning summary when they check their dashboard before that session
+      const isBeforeFirstSession = nowTime < firstSessionTime;
+      
+      if (isBeforeFirstSession) {
         return true;
       }
     } else if (currentHourInUserTz < 12) {
-      // If no first session scheduled but it's morning in user's timezone, show yesterday's summary
+      // If no first session scheduled but it's before noon in user's timezone, show yesterday's summary
       return true;
     }
 
     // Check if we should show after last session (evening)
-    if (summary.last_session_end) {
+    // Only show if there are NO remaining sessions today
+    if (summary.last_session_end && !summary.has_remaining_sessions) {
       const lastSessionTime = new Date(summary.last_session_end).getTime();
       // Show if it's been at least 5 minutes since last session ended
       // and it's been less than 12 hours (to avoid showing next day)
@@ -70,15 +74,7 @@ export function DailySummaryCard() {
       const timeSinceLastSession = nowTime - lastSessionTime;
       
       if (timeSinceLastSession >= minDelay && timeSinceLastSession < maxDelay) {
-        // Also check if there are no more sessions today
-        // (If first_session_start is null or in the past, there are no more)
-        if (!summary.first_session_start) {
-          return true; // No more sessions today
-        }
-        const firstSessionTime = new Date(summary.first_session_start).getTime();
-        if (firstSessionTime <= nowTime) {
-          return true; // First session already passed, no more today
-        }
+        return true;
       }
     }
 

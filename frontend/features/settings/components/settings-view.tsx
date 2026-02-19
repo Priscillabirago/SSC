@@ -21,6 +21,7 @@ import { toast } from "@/components/ui/use-toast";
 import { StudyWindow, StudyWindowConfig, CustomTimeRange, UserProfile } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 import { changePassword, resetPassword, changeEmail } from "@/features/auth/api";
+import { ConstraintsManager } from "@/features/constraints/components/constraints-manager";
 
 const timezones = [
   "UTC",
@@ -75,61 +76,78 @@ const timezones = [
   "Africa/Lagos",
 ];
 
+const timezoneAliases: Record<string, string> = {
+  "Asia/Calcutta": "Asia/Kolkata",
+  "Asia/Katmandu": "Asia/Kathmandu",
+  "America/Argentina/Buenos_Aires": "America/Buenos_Aires",
+};
+
+function normalizeTimezone(tz?: string): string | null {
+  if (!tz) return null;
+  const aliased = timezoneAliases[tz] ?? tz;
+  return aliased;
+}
+
+function isSupportedTimezone(tz?: string): tz is string {
+  const normalized = normalizeTimezone(tz);
+  return Boolean(normalized && timezones.includes(normalized));
+}
+
 const studyWindows: StudyWindow[] = ["morning", "afternoon", "evening", "night"];
 
 // Helper to get friendly timezone label
 function getTimezoneLabel(tz: string): string {
   const labels: Record<string, string> = {
-    "UTC": "UTC (Coordinated Universal Time)",
+    "UTC": "UTC",
     // Americas
-    "America/New_York": "Eastern Time (ET)",
-    "America/Chicago": "Central Time (CT)",
-    "America/Denver": "Mountain Time (MT)",
-    "America/Los_Angeles": "Pacific Time (PT)",
-    "America/Phoenix": "Mountain Time - Arizona (MST)",
-    "America/Anchorage": "Alaska Time (AKT)",
-    "America/Toronto": "Eastern Time - Toronto (ET)",
-    "America/Vancouver": "Pacific Time - Vancouver (PT)",
-    "America/Mexico_City": "Central Time - Mexico (CST)",
-    "America/Sao_Paulo": "Brasília Time (BRT)",
-    "America/Buenos_Aires": "Argentina Time (ART)",
+    "America/New_York": "ET",
+    "America/Chicago": "CT",
+    "America/Denver": "MT",
+    "America/Los_Angeles": "PT",
+    "America/Phoenix": "MST (AZ)",
+    "America/Anchorage": "AKT",
+    "America/Toronto": "ET (Toronto)",
+    "America/Vancouver": "PT (Vancouver)",
+    "America/Mexico_City": "CST (MX)",
+    "America/Sao_Paulo": "BRT",
+    "America/Buenos_Aires": "ART",
     // Europe
-    "Europe/London": "London (GMT/BST)",
-    "Europe/Paris": "Central European Time (CET)",
-    "Europe/Berlin": "Central European Time - Berlin (CET)",
-    "Europe/Rome": "Central European Time - Rome (CET)",
-    "Europe/Madrid": "Central European Time - Madrid (CET)",
-    "Europe/Amsterdam": "Central European Time - Amsterdam (CET)",
-    "Europe/Stockholm": "Central European Time - Stockholm (CET)",
-    "Europe/Zurich": "Central European Time - Zurich (CET)",
-    "Europe/Vienna": "Central European Time - Vienna (CET)",
+    "Europe/London": "UK (GMT/BST)",
+    "Europe/Paris": "CET (Paris)",
+    "Europe/Berlin": "CET (Berlin)",
+    "Europe/Rome": "CET (Rome)",
+    "Europe/Madrid": "CET (Madrid)",
+    "Europe/Amsterdam": "CET (AMS)",
+    "Europe/Stockholm": "CET (STO)",
+    "Europe/Zurich": "CET (ZRH)",
+    "Europe/Vienna": "CET (VIE)",
     "Europe/Dublin": "Dublin (GMT/IST)",
-    "Europe/Lisbon": "Western European Time - Lisbon (WET)",
-    "Europe/Athens": "Eastern European Time - Athens (EET)",
-    "Europe/Moscow": "Moscow Time (MSK)",
+    "Europe/Lisbon": "Lisbon (WET)",
+    "Europe/Athens": "EET (Athens)",
+    "Europe/Moscow": "MSK",
     // Asia
-    "Asia/Dubai": "Gulf Standard Time (GST)",
-    "Asia/Karachi": "Pakistan Standard Time (PKT)",
-    "Asia/Kolkata": "India Standard Time (IST)",
-    "Asia/Dhaka": "Bangladesh Standard Time (BST)",
-    "Asia/Bangkok": "Indochina Time (ICT)",
-    "Asia/Singapore": "Singapore Time (SGT)",
-    "Asia/Hong_Kong": "Hong Kong Time (HKT)",
-    "Asia/Shanghai": "China Standard Time (CST)",
-    "Asia/Seoul": "Korea Standard Time (KST)",
-    "Asia/Tokyo": "Japan Standard Time (JST)",
-    "Asia/Manila": "Philippine Time (PHT)",
-    "Asia/Jakarta": "Western Indonesia Time (WIB)",
+    "Asia/Dubai": "GST",
+    "Asia/Karachi": "PKT",
+    "Asia/Kolkata": "IST",
+    "Asia/Dhaka": "BST",
+    "Asia/Bangkok": "ICT",
+    "Asia/Singapore": "SGT",
+    "Asia/Hong_Kong": "HKT",
+    "Asia/Shanghai": "CST (CN)",
+    "Asia/Seoul": "KST",
+    "Asia/Tokyo": "JST",
+    "Asia/Manila": "PHT",
+    "Asia/Jakarta": "WIB",
     // Oceania
-    "Australia/Sydney": "Australian Eastern Time (AET)",
-    "Australia/Melbourne": "Australian Eastern Time - Melbourne (AET)",
-    "Australia/Brisbane": "Australian Eastern Time - Brisbane (AET)",
-    "Australia/Perth": "Australian Western Time (AWST)",
-    "Pacific/Auckland": "New Zealand Time (NZST)",
+    "Australia/Sydney": "AET (SYD)",
+    "Australia/Melbourne": "AET (MEL)",
+    "Australia/Brisbane": "AET (BNE)",
+    "Australia/Perth": "AWST",
+    "Pacific/Auckland": "NZST",
     // Africa
-    "Africa/Cairo": "Eastern European Time - Cairo (EET)",
-    "Africa/Johannesburg": "South Africa Standard Time (SAST)",
-    "Africa/Lagos": "West Africa Time (WAT)",
+    "Africa/Cairo": "EET (Cairo)",
+    "Africa/Johannesburg": "SAST",
+    "Africa/Lagos": "WAT",
   };
   return labels[tz] || tz;
 }
@@ -178,18 +196,20 @@ export function SettingsView() {
       const parsed = parseWindowsFromProfile(profile.preferred_study_windows);
       setSelectedPresets(parsed.presets);
       setCustomRanges(parsed.customs);
-      setSelectedTimezone(profile.timezone || "UTC");
+      const normalized = normalizeTimezone(profile.timezone) ?? "UTC";
+      setSelectedTimezone(isSupportedTimezone(normalized) ? normalized : "UTC");
     }
   }, [profile]);
 
   const handleUseCurrentTimezone = () => {
     try {
       const detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      if (timezones.includes(detectedTimezone)) {
-        setSelectedTimezone(detectedTimezone);
+      const normalized = normalizeTimezone(detectedTimezone);
+      if (isSupportedTimezone(normalized || undefined)) {
+        setSelectedTimezone(normalized!);
         toast({
           title: "Timezone updated",
-          description: `Set to ${getTimezoneLabel(detectedTimezone)}`,
+          description: `Set to ${getTimezoneLabel(normalized!)}`,
         });
       } else {
         toast({
@@ -241,7 +261,18 @@ export function SettingsView() {
     }
     
     // Use selectedTimezone state instead of formData (since Select might not update formData properly)
-    const timezoneToUse = selectedTimezone || profile.timezone;
+    const normalizedSelectedTz = normalizeTimezone(selectedTimezone);
+    const fallbackProfileTz = normalizeTimezone(profile.timezone);
+    
+    // Determine timezone with fallback logic
+    let timezoneToUse: string;
+    if (isSupportedTimezone(normalizedSelectedTz || undefined)) {
+      timezoneToUse = normalizedSelectedTz!;
+    } else if (isSupportedTimezone(fallbackProfileTz || undefined)) {
+      timezoneToUse = fallbackProfileTz!;
+    } else {
+      timezoneToUse = "UTC";
+    }
     
     // Build windows array in new format
     const windows: StudyWindowConfig[] = [
@@ -310,9 +341,16 @@ export function SettingsView() {
                 <div className="space-y-2">
                   <Label>Timezone</Label>
                   <div className="flex gap-2">
-                    <Select value={selectedTimezone} onValueChange={setSelectedTimezone} name="timezone">
+                    <Select 
+                      key={selectedTimezone} 
+                      value={selectedTimezone} 
+                      onValueChange={setSelectedTimezone} 
+                      name="timezone"
+                    >
                       <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="Select timezone" />
+                        <SelectValue placeholder="Select timezone">
+                          {selectedTimezone ? getTimezoneLabel(selectedTimezone) : "Select timezone"}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent className="max-h-[300px]">
                         {timezones.map((zone) => (
@@ -473,6 +511,9 @@ export function SettingsView() {
             </form>
           </CardContent>
         </Card>
+        
+        {/* Blocked Times / Constraints */}
+        <ConstraintsManager />
         </div>
         <Card>
           <CardHeader>

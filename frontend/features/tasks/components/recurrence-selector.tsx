@@ -241,8 +241,11 @@ export function RecurrenceSelector({
               <Input
                 type="number"
                 min={0}
-                value={value.advance_days || 3}
-                onChange={(e) => updatePattern({ advance_days: Number(e.target.value) })}
+                value={value.advance_days ?? 3}
+                onChange={(e) => {
+                  const numValue = e.target.value === "" ? 0 : Number(e.target.value);
+                  updatePattern({ advance_days: Math.max(0, numValue) });
+                }}
                 className="h-8 text-xs"
               />
               <p className="text-[10px] text-muted-foreground">

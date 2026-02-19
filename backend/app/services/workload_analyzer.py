@@ -291,8 +291,12 @@ def analyze_pre_generation(
     """
     Analyze workload before schedule generation.
     
-    This is a read-only analysis that does not modify any data.
-    Returns warnings and suggestions for the user.
+    Returns simplified warnings in 5 categories:
+    1. overloaded - Too much work for available time
+    2. deadline_risk - Tasks may not finish on time
+    3. burnout_risk - Too many heavy days (only in post-gen)
+    4. exam_prep_needed - Exam coming with no prep
+    5. deadline_cluster - Multiple deadlines same day
     """
     ref = reference or datetime.now(timezone.utc)
     
@@ -324,135 +328,116 @@ def analyze_pre_generation(
     constraint_info = _calculate_constraint_impact(constraints, user, ref)
     completion_rate = _calculate_historical_completion_rate(db, user.id)
     
-    # Calculate available hours (after constraints)
-    available_hours = window_info["total_hours_per_week"]
+    # Calculate window hours (after constraints)
+    window_hours = window_info["total_hours_per_week"]
     if constraint_info["total_blocked_hours_per_week"] > 0:
-        available_hours -= constraint_info["total_blocked_hours_per_week"]
-    available_hours = max(0, available_hours)
+        window_hours -= constraint_info["total_blocked_hours_per_week"]
+    window_hours = max(0, window_hours)
     
     # Calculate task hours
     total_task_hours = sum(task.estimated_minutes for task in tasks) / 60
     
-    # Calculate realistic capacity
+    # Calculate realistic capacity (what user actually completes)
     realistic_capacity = user.weekly_study_hours * completion_rate
     
     # Detect issues
-    deadline_risks = _detect_deadline_risks(tasks, available_hours, ref)
+    deadline_risks = _detect_deadline_risks(tasks, window_hours, ref)
     deadline_clusters = _detect_deadline_clustering(tasks, ref)
     exam_prep_missing = _check_exam_prep(subjects, tasks, ref, user.timezone)
     
-    # Generate warnings
+    # Generate simplified warnings
     warnings = []
     
-    # Warning 1: Total hours > capacity
-    if total_task_hours > realistic_capacity * 1.5:
+    # 1. OVERLOADED - Compare against realistic capacity (what user actually completes)
+    is_severely_overloaded = total_task_hours > realistic_capacity * 1.5
+    is_moderately_overloaded = total_task_hours > realistic_capacity * 1.2
+    
+    if is_severely_overloaded:
         warnings.append({
-            "type": "capacity_exceeded",
+            "type": "overloaded",
             "severity": "hard",
-            "title": "Workload Exceeded",
-            "message": f"You have {total_task_hours:.1f} hours of work this week, but your realistic capacity is ~{realistic_capacity:.1f} hours (based on {completion_rate:.0%} completion rate).",
+            "title": "You're Overloaded",
+            "message": f"You have {total_task_hours:.0f}h of tasks, but realistically you complete ~{realistic_capacity:.0f}h/week (based on your {user.weekly_study_hours}h goal and {completion_rate:.0%} completion rate).",
             "suggestions": [
-                f"Increase weekly goal from {user.weekly_study_hours}h to {int(total_task_hours / completion_rate)}h (temporary)",
-                f"Move {int((total_task_hours - realistic_capacity) / 2)} hours of tasks to next week",
                 EXTEND_DEADLINES_SUGGESTION,
+                "Move some tasks to next week",
+                "Focus on highest-priority tasks first",
             ],
         })
-    elif total_task_hours > realistic_capacity * 1.3:
+    elif is_moderately_overloaded:
         warnings.append({
-            "type": "capacity_exceeded",
+            "type": "overloaded",
             "severity": "soft",
-            "title": "Heavy Workload",
-            "message": f"You have {total_task_hours:.1f} hours of work this week, but your realistic capacity is ~{realistic_capacity:.1f} hours.",
+            "title": "Heavy Week Ahead",
+            "message": f"You have {total_task_hours:.0f}h of tasks, which exceeds your realistic capacity of ~{realistic_capacity:.0f}h/week.",
             "suggestions": [
-                f"Consider increasing weekly goal to {int(total_task_hours / completion_rate)}h",
-                "Or move some tasks to next week",
+                "Stay on top of your schedule this week",
+                "Consider moving lower-priority tasks if needed",
             ],
         })
     
-    # Warning 2: Available time insufficient
-    if total_task_hours > available_hours:
-        hours_short = total_task_hours - available_hours
+    # 1b. WINDOW CONSTRAINT - Separate warning if tasks exceed available window time
+    if total_task_hours > window_hours and window_hours > 0:
+        window_short = total_task_hours - window_hours
         warnings.append({
-            "type": "time_insufficient",
+            "type": "overloaded",
             "severity": "hard",
             "title": "Time Window Constraint",
-            "message": f"You have {total_task_hours:.1f} hours of tasks, but only {available_hours:.1f} hours available in your study windows this week.",
+            "message": f"You have {total_task_hours:.0f}h of tasks but only {window_hours:.0f}h available in your study windows this week.",
             "suggestions": [
-                f"Expand study windows: Add {hours_short / 7:.1f} hours/day this week",
-                f"Move {hours_short:.1f} hours of tasks to next week",
+                "Expand your study windows in Settings",
+                f"Move {window_short:.0f}h of tasks to next week",
                 EXTEND_DEADLINES_SUGGESTION,
             ],
         })
     
-    # Warning 3: Goal vs available time mismatch
-    if user.weekly_study_hours > available_hours:
-        warnings.append({
-            "type": "goal_mismatch",
-            "severity": "soft",
-            "title": "Goal Mismatch",
-            "message": f"Your weekly goal is {user.weekly_study_hours} hours, but your study windows only allow {available_hours:.1f} hours/week.",
-            "suggestions": [
-                f"Expand study windows to match your goal (add {user.weekly_study_hours - available_hours:.1f}h/week)",
-                f"Reduce weekly goal to {int(available_hours)}h (realistic)",
-            ],
-        })
-    
-    # Warning 4: Deadline risks
+    # 2. DEADLINE RISK - Tasks that may not finish on time
     if deadline_risks:
-        high_risk = [r for r in deadline_risks if r["hours_short"] > 2]
+        high_risk = [r for r in deadline_risks if r["hours_short"] > 1]
         if high_risk:
+            task_names = [r["task_title"] for r in high_risk[:3]]
             warnings.append({
                 "type": "deadline_risk",
                 "severity": "hard",
-                "title": "Deadline Risk",
-                "message": f"{len(high_risk)} task(s) may not be completed on time with current schedule.",
+                "title": "Deadline at Risk",
+                "message": f"{len(high_risk)} task(s) may not be done on time.",
                 "tasks": [{"title": r["task_title"], "hours_short": r["hours_short"]} for r in high_risk],
                 "suggestions": [
-                    f"Add {sum(r['hours_short'] for r in high_risk):.1f} hours to study windows this week",
-                    "Request deadline extensions",
-                    "Start these tasks earlier",
+                    f"Prioritize: {', '.join(task_names)}",
+                    "Request deadline extensions if possible",
+                    EXTEND_DEADLINES_SUGGESTION,
                 ],
             })
     
-    # Warning 5: Deadline clustering
-    if deadline_clusters:
-        warnings.append({
-            "type": "deadline_clustering",
-            "severity": "soft",
-            "title": "Deadline Clustering",
-            "message": "Multiple tasks due on the same day detected.",
-            "clusters": deadline_clusters,
-            "suggestions": [
-                "Start tasks earlier to avoid last-minute rush",
-                "Request deadline extensions for lower-priority tasks",
-            ],
-        })
-    
-    # Warning 6: Exam prep missing
+    # 3. EXAM PREP NEEDED - Exam coming with no prep
     if exam_prep_missing:
+        subject_names = [s["subject_name"] for s in exam_prep_missing]
+        days_info = exam_prep_missing[0]["days_until_exam"]
         warnings.append({
-            "type": "exam_prep_missing",
+            "type": "exam_prep_needed",
             "severity": "hard",
-            "title": "Exam Prep Missing",
-            "message": f"{len(exam_prep_missing)} subject(s) with upcoming exams have no prep scheduled.",
+            "title": "Exam Prep Needed",
+            "message": f"{subject_names[0]} exam in {days_info} days with no prep scheduled.",
             "subjects": exam_prep_missing,
             "suggestions": [
-                "Add 8-10 hours of prep this week for each exam",
-                "Create review tasks",
-                "Schedule daily review sessions",
+                "Create review tasks for this subject",
+                "Add 1-2 hours of daily review",
+                "Break down topics into smaller study chunks",
             ],
         })
     
-    # Warning 7: Constraints blocking time
-    if constraint_info["total_blocked_hours_per_week"] > available_hours * 0.3:
+    # 4. DEADLINE CLUSTER - Multiple things due same day
+    if deadline_clusters:
+        worst_cluster = max(deadline_clusters, key=lambda c: c["task_count"])
         warnings.append({
-            "type": "constraints_impact",
+            "type": "deadline_cluster",
             "severity": "soft",
-            "title": "Constraints Impact",
-            "message": f"Your constraints block {constraint_info['total_blocked_hours_per_week']:.1f} hours/week, reducing available time significantly.",
+            "title": "Busy Deadline Day",
+            "message": f"{worst_cluster['task_count']} tasks due on {worst_cluster['deadline_day']}.",
+            "clusters": deadline_clusters,
             "suggestions": [
-                "Review and modify constraints if possible",
-                "Expand study windows to compensate",
+                "Start these tasks early in the week",
+                "Consider requesting extensions for some",
             ],
         })
     
@@ -460,11 +445,8 @@ def analyze_pre_generation(
         "warnings": warnings,
         "metrics": {
             "total_task_hours": total_task_hours,
-            "available_hours_per_week": available_hours,
-            "realistic_capacity": realistic_capacity,
-            "completion_rate": completion_rate,
             "weekly_goal": user.weekly_study_hours,
-            "hours_per_day": window_info["hours_per_day"],
+            "window_hours": window_hours,
         },
     }
 
@@ -546,7 +528,7 @@ def _check_unscheduled_tasks(unscheduled_tasks: list[Task], unscheduled_hours: f
         "suggestions": [
             f"Expand study windows: Add {unscheduled_hours / 7:.1f} hours/day this week",
             f"Move {unscheduled_hours:.1f} hours of tasks to next week",
-            "Extend deadlines for lower-priority tasks",
+            EXTEND_DEADLINES_SUGGESTION,
             f"Or increase weekly goal to accommodate {unscheduled_hours:.1f} more hours",
         ],
     }]
@@ -738,7 +720,7 @@ def _check_constraints_blocking_all_time(
             continue  # No constraints for this day
         
         # Check if all windows are blocked
-        available_blocks = apply_constraints(window_ranges, effective_constraints)
+        available_blocks = apply_constraints(window_ranges, effective_constraints, user_tz)
         
         # Check if this day has no sessions in the plan
         day_plan = next((d for d in plan.days if isinstance(d.day, datetime) and d.day.date() == day_date or isinstance(d.day, date) and d.day == day_date), None)
@@ -774,13 +756,15 @@ def analyze_post_generation(
     plan: WeeklyPlan,
     db: Session,
     user: User,
-    reference: datetime | None = None,  # Reserved for future use
+    reference: datetime | None = None,
 ) -> dict[str, Any]:
     """
     Analyze workload after schedule generation.
     
-    This is a read-only analysis that does not modify any data.
-    Returns warnings about the generated schedule.
+    Returns simplified warnings based on actual schedule results:
+    1. overloaded - Tasks that couldn't be scheduled
+    2. deadline_risk - Tasks scheduled too close to deadline
+    3. burnout_risk - Too many heavy days in a row
     """
     ref = reference or datetime.now(timezone.utc)
     all_tasks = (
@@ -793,32 +777,64 @@ def analyze_post_generation(
         .all()
     )
     
-    constraints = (
-        db.query(ScheduleConstraint)
-        .filter(ScheduleConstraint.user_id == user.id)
-        .all()
-    )
-    
     window_info = _calculate_available_hours_from_windows(user)
-    hours_per_day = window_info["hours_per_day"]
-    
     daily_scheduled_hours, scheduled_task_ids = _collect_schedule_data(plan)
     
     unscheduled_tasks = [task for task in all_tasks if task.id not in scheduled_task_ids]
     unscheduled_hours = sum(task.estimated_minutes for task in unscheduled_tasks) / 60
     
     warnings = []
-    warnings.extend(_check_day_overloads(daily_scheduled_hours, hours_per_day))
-    warnings.extend(_check_unscheduled_tasks(unscheduled_tasks, unscheduled_hours))
-    warnings.extend(_check_schedule_imbalance(daily_scheduled_hours))
-    warnings.extend(_check_consecutive_heavy_days(daily_scheduled_hours))
-    warnings.extend(_check_tight_deadlines(plan, all_tasks))
-    warnings.extend(_check_constraints_blocking_all_time(plan, user, constraints, ref))
+    
+    # 1. OVERLOADED - Tasks that couldn't fit
+    if unscheduled_tasks:
+        warnings.append({
+            "type": "overloaded",
+            "severity": "hard",
+            "title": f"{len(unscheduled_tasks)} Task(s) Couldn't Fit",
+            "message": f"{unscheduled_hours:.0f}h of work couldn't be scheduled into your available time.",
+            "tasks": [
+                {"title": task.title, "hours": task.estimated_minutes / 60}
+                for task in unscheduled_tasks[:5]
+            ],
+            "suggestions": [
+                "Add more study time in Settings",
+                EXTEND_DEADLINES_SUGGESTION,
+                "Remove or postpone some tasks",
+            ],
+        })
+    
+    # 2. DEADLINE RISK - Tasks scheduled too close to deadline
+    tight_deadlines = _get_tight_deadline_tasks(plan, all_tasks)
+    if tight_deadlines:
+        warnings.append({
+            "type": "deadline_risk",
+            "severity": "soft",
+            "title": "Cutting It Close",
+            "message": f"{len(tight_deadlines)} task(s) finish very close to their deadline.",
+            "tasks": tight_deadlines,
+            "suggestions": [
+                "Try to complete these tasks a day early",
+                "Have a backup plan if you fall behind",
+            ],
+        })
+    
+    # 3. BURNOUT RISK - Consecutive heavy days
+    burnout_info = _get_burnout_risk(daily_scheduled_hours)
+    if burnout_info:
+        warnings.append({
+            "type": "burnout_risk",
+            "severity": "soft",
+            "title": "Heavy Schedule Ahead",
+            "message": f"{burnout_info['streak_length']} heavy days in a row ({burnout_info['total_hours']:.0f}h total).",
+            "days": burnout_info["days"],
+            "suggestions": [
+                "Take short breaks between study sessions",
+                "Consider lighter days after this stretch",
+                "Don't skip meals or sleep",
+            ],
+        })
     
     scheduled_hours_list = list(daily_scheduled_hours.values()) if daily_scheduled_hours else [0]
-    max_hours = max(scheduled_hours_list) if scheduled_hours_list else 0
-    min_hours = min(scheduled_hours_list) if scheduled_hours_list else 0
-    imbalance_ratio = max_hours / min_hours if min_hours > 0 else 1.0
     
     return {
         "warnings": warnings,
@@ -830,7 +846,64 @@ def analyze_post_generation(
                 day.strftime("%A"): hours
                 for day, hours in daily_scheduled_hours.items()
             },
-            "imbalance_ratio": imbalance_ratio,
         },
     }
+
+
+def _get_tight_deadline_tasks(plan: WeeklyPlan, all_tasks: list[Task]) -> list[dict[str, Any]]:
+    """Get tasks scheduled too close to their deadline."""
+    task_last_session = {}
+    for day_plan in plan.days:
+        for block in day_plan.sessions:
+            if block.task_id:
+                task_last_session[block.task_id] = max(
+                    task_last_session.get(block.task_id, block.end_time),
+                    block.end_time
+                )
+    
+    tight_deadlines = []
+    for task_id, last_session_end in task_last_session.items():
+        task = next((t for t in all_tasks if t.id == task_id), None)
+        if not task or not task.deadline:
+            continue
+        
+        deadline = _normalize_to_utc(task.deadline)
+        session_end = _normalize_to_utc(last_session_end)
+        buffer_hours = (deadline - session_end).total_seconds() / 3600
+        
+        if 0 < buffer_hours < 4:  # Less than 4 hours buffer
+            tight_deadlines.append({
+                "title": task.title,
+                "buffer_hours": buffer_hours,
+            })
+    
+    return tight_deadlines
+
+
+def _get_burnout_risk(daily_scheduled_hours: dict[date, float]) -> dict[str, Any] | None:
+    """Check for consecutive heavy days."""
+    sorted_days = sorted(daily_scheduled_hours.items(), key=lambda x: x[0])
+    current_streak = []
+    
+    for day_date, hours in sorted_days:
+        if hours > 5:  # More than 5 hours is considered heavy
+            current_streak.append((day_date, hours))
+        else:
+            if len(current_streak) >= 3:
+                return {
+                    "streak_length": len(current_streak),
+                    "total_hours": sum(h for _, h in current_streak),
+                    "days": [d.strftime("%A") for d, _ in current_streak],
+                }
+            current_streak = []
+    
+    # Check final streak
+    if len(current_streak) >= 3:
+        return {
+            "streak_length": len(current_streak),
+            "total_hours": sum(h for _, h in current_streak),
+            "days": [d.strftime("%A") for d, _ in current_streak],
+        }
+    
+    return None
 

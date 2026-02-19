@@ -116,6 +116,39 @@ export function formatTimer(minutes: number | null | undefined): string {
 }
 
 /**
+ * Parse a time input in "HH:MM" or minutes format into total minutes.
+ * - "1:30" → 90
+ * - "90"   → 90
+ */
+export function parseTimeToMinutes(value: string): number | null {
+  if (!value) return null;
+
+  const trimmed = value.trim();
+
+  // If it looks like plain minutes, parse as integer
+  if (!trimmed.includes(":")) {
+    const asNumber = Number(trimmed);
+    return Number.isFinite(asNumber) && asNumber >= 0 ? Math.floor(asNumber) : null;
+  }
+
+  const [hoursPart, minutesPart] = trimmed.split(":");
+  const hours = Number(hoursPart);
+  const minutes = Number(minutesPart);
+
+  if (
+    Number.isNaN(hours) ||
+    Number.isNaN(minutes) ||
+    hours < 0 ||
+    minutes < 0 ||
+    minutes >= 60
+  ) {
+    return null;
+  }
+
+  return hours * 60 + minutes;
+}
+
+/**
  * Convert a local date/time to UTC ISO string, preserving BOTH date and time.
  * 
  * Strategy: Store the local time converted to UTC. When displaying:

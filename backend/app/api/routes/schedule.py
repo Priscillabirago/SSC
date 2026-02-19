@@ -11,7 +11,7 @@ from app.models.study_session import SessionStatus, StudySession
 from app.models.user import User
 from app.schemas.coach import SessionPreparationRequest, SessionPreparationResponse
 from app.schemas.schedule import WeeklyPlan
-from app.schemas.session import StudySessionPublic, StudySessionUpdate
+from app.schemas.session import StudySessionPublic, StudySessionUpdate, StudySessionCreate
 from app.services import coach as coach_service
 from app.services.scheduling import generate_weekly_schedule, micro_plan
 from app.services.schedule_optimizer import build_schedule_context, apply_ai_optimizations
@@ -60,6 +60,7 @@ def _serialize_session(session: StudySession) -> StudySessionPublic:
         status=session.status,
         energy_level=session.energy_level,
         generated_by=session.generated_by,
+        is_pinned=session.is_pinned,
         focus=_session_focus(session),
     )
 
@@ -116,14 +117,28 @@ def _normalize_window_times(window_start: datetime, window_end: datetime) -> tup
 def _sessions_overlap(
     start1: datetime, end1: datetime, start2: datetime, end2: datetime
 ) -> bool:
-    """Check if two time ranges overlap."""
-    return not (end1 <= start2 or start1 >= end2)
+    """Check if two time ranges overlap.
+    
+    Normalizes datetimes to naive UTC before comparison to handle
+    potential timezone-aware vs naive datetime mismatches.
+    """
+    # Normalize all datetimes to naive (remove tzinfo) for consistent comparison
+    def to_naive(dt: datetime) -> datetime:
+        if dt.tzinfo is not None:
+            return dt.replace(tzinfo=None)
+        return dt
+    
+    s1, e1, s2, e2 = to_naive(start1), to_naive(end1), to_naive(start2), to_naive(end2)
+    return not (e1 <= s2 or s1 >= e2)
 
 
 def _persist_sessions_to_db(
     plan: WeeklyPlan, db: Session, current_user: User
 ) -> None:
-    """Delete old PLANNED sessions and persist new ones, preserving COMPLETED/PARTIAL sessions.
+    """Delete old PLANNED sessions and persist new ones, preserving active, completed, and pinned sessions.
+    
+    Preserves: COMPLETED, PARTIAL, IN_PROGRESS (active focus sessions), and any PINNED sessions
+    Deletes: PLANNED, SKIPPED (only if not pinned)
     
     Uses a transaction to ensure atomicity - either all changes succeed or none do.
     This prevents issues with multiple rapid regenerations.
@@ -134,18 +149,31 @@ def _persist_sessions_to_db(
     
     try:
         # Get preserved sessions BEFORE deletion to avoid race conditions
+        # Include IN_PROGRESS to protect active focus sessions from deletion
+        # Also include any pinned sessions regardless of status
+        from sqlalchemy import or_
         preserved_sessions = (
             db.query(StudySession)
             .filter(
                 StudySession.user_id == current_user.id,
                 StudySession.start_time >= window_start_naive,
                 StudySession.start_time < window_end_naive,
-                StudySession.status.in_([SessionStatus.COMPLETED, SessionStatus.PARTIAL]),
+                or_(
+                    StudySession.status.in_([
+                        SessionStatus.COMPLETED, 
+                        SessionStatus.PARTIAL,
+                        SessionStatus.IN_PROGRESS
+                    ]),
+                    StudySession.is_pinned == True
+                ),
             )
             .all()
         )
         
-        # Only delete PLANNED and SKIPPED sessions - preserve COMPLETED and PARTIAL
+        # Only delete PLANNED and SKIPPED sessions that are NOT pinned
+        # Preserve: COMPLETED, PARTIAL, IN_PROGRESS, and all PINNED sessions
+        # Use or_(is_pinned == False, is_pinned.is_(None)) to handle NULL values
+        from sqlalchemy import or_ as sql_or
         (
             db.query(StudySession)
             .filter(
@@ -153,6 +181,7 @@ def _persist_sessions_to_db(
                 StudySession.start_time >= window_start_naive,
                 StudySession.start_time < window_end_naive,
                 StudySession.status.in_([SessionStatus.PLANNED, SessionStatus.SKIPPED]),
+                sql_or(StudySession.is_pinned == False, StudySession.is_pinned.is_(None)),  # Don't delete pinned sessions
             )
             .delete(synchronize_session=False)
         )
@@ -188,6 +217,65 @@ def _persist_sessions_to_db(
         raise
 
 
+def _round_to_nearest_minutes(dt: datetime, minutes: int = 5) -> datetime:
+    """Round datetime to nearest N minutes for consistent scheduling."""
+    # Round to nearest N minutes
+    total_seconds = dt.minute * 60 + dt.second
+    rounded_minutes = round(total_seconds / (minutes * 60)) * minutes
+    return dt.replace(minute=rounded_minutes % 60, second=0, microsecond=0)
+
+
+def _cleanup_stale_sessions(db: Session, user_id: int, now_utc: datetime) -> dict[str, int]:
+    """Clean up stale IN_PROGRESS and missed PLANNED sessions before regeneration.
+    
+    Returns:
+        Dict with counts: {"stale_in_progress": N, "missed_planned": N}
+    """
+    # 1. Mark stale IN_PROGRESS sessions as PARTIAL
+    # These are sessions where user started focus mode but never completed
+    # (browser crash, closed tab, etc.)
+    stale_threshold = now_utc - timedelta(hours=2)
+    
+    stale_in_progress = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == user_id,
+            StudySession.status == SessionStatus.IN_PROGRESS,
+            StudySession.end_time < stale_threshold
+        )
+        .all()
+    )
+    
+    for session in stale_in_progress:
+        session.status = SessionStatus.PARTIAL
+    
+    # 2. Mark missed PLANNED sessions as SKIPPED
+    # These are sessions that were never started and are now in the past
+    # 15 minute grace period in case user is just running late
+    missed_threshold = now_utc - timedelta(minutes=15)
+    
+    missed_planned = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == user_id,
+            StudySession.status == SessionStatus.PLANNED,
+            StudySession.end_time < missed_threshold
+        )
+        .all()
+    )
+    
+    for session in missed_planned:
+        session.status = SessionStatus.SKIPPED
+    
+    if stale_in_progress or missed_planned:
+        db.flush()  # Flush changes before continuing
+    
+    return {
+        "stale_in_progress": len(stale_in_progress),
+        "missed_planned": len(missed_planned)
+    }
+
+
 @router.post("/generate", response_model=WeeklyPlan)
 def generate_week_plan(
     use_ai_optimization: bool = Query(default=False, description="Enable AI optimization for better real-world efficiency"),
@@ -201,20 +289,23 @@ def generate_week_plan(
                             for better real-world efficiency (workload balancing,
                             circadian matching, etc.). Defaults to False.
     
-    Note: Uses start of current day in user's timezone as reference time to ensure
-    consistent results across multiple regenerations within the same day.
+    Note: Uses current time (rounded to nearest 5 minutes) as reference to ensure
+    sessions are only scheduled from now forward. This prevents scheduling in the past
+    while maintaining consistency across rapid regenerations.
     """
-    # Use start of current day in user's timezone for consistent reference time
-    # This prevents issues where rapid regenerations skip past windows differently
     from zoneinfo import ZoneInfo
     try:
         user_tz = ZoneInfo(current_user.timezone)
     except Exception:
         user_tz = ZoneInfo("UTC")
     
-    now_local = datetime.now(user_tz)
-    today_start_local = datetime.combine(now_local.date(), datetime.min.time()).replace(tzinfo=user_tz)
-    reference_time = today_start_local.astimezone(timezone.utc)
+    # Use actual current time, rounded to nearest 5 minutes for consistency
+    # This ensures sessions are scheduled from "now" forward, not from midnight
+    now_utc = datetime.now(timezone.utc)
+    reference_time = _round_to_nearest_minutes(now_utc, minutes=5)
+    
+    # Clean up stale and missed sessions before generating new schedule
+    cleanup_counts = _cleanup_stale_sessions(db, current_user.id, now_utc)
     
     plan, rescheduling_info = generate_weekly_schedule(db, current_user, reference=reference_time)
     
@@ -222,8 +313,18 @@ def generate_week_plan(
     if use_ai_optimization:
         plan, optimization_explanation = _apply_ai_optimization(plan, db, current_user)
     
-    # Combine rescheduling summary with optimization explanation if both exist
+    # Combine all explanations: cleanup info, rescheduling summary, and optimization
     combined_explanation_parts = []
+    
+    # Add cleanup notification if any sessions were affected
+    cleanup_messages = []
+    if cleanup_counts["stale_in_progress"] > 0:
+        cleanup_messages.append(f"{cleanup_counts['stale_in_progress']} incomplete session(s) marked as partial")
+    if cleanup_counts["missed_planned"] > 0:
+        cleanup_messages.append(f"{cleanup_counts['missed_planned']} past session(s) marked as skipped")
+    if cleanup_messages:
+        combined_explanation_parts.append("📋 " + ", ".join(cleanup_messages))
+    
     if rescheduling_info.get("summary"):
         combined_explanation_parts.append(f"📅 {rescheduling_info['summary']}")
     if optimization_explanation:
@@ -279,12 +380,31 @@ def list_sessions(
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> list[StudySessionPublic]:
+    """List sessions from start of today (in user's timezone) and all future sessions.
+    
+    This ensures users can see and manage all sessions for the current day,
+    even if they forgot to mark one as completed earlier.
+    """
     from sqlalchemy.orm import joinedload
-    now = datetime.now(timezone.utc) - timedelta(hours=1)
+    from zoneinfo import ZoneInfo
+    
+    # Get start of today in user's timezone
+    try:
+        user_tz = ZoneInfo(current_user.timezone)
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+    
+    now_local = datetime.now(user_tz)
+    today_start_local = datetime.combine(now_local.date(), datetime.min.time()).replace(tzinfo=user_tz)
+    today_start_utc = today_start_local.astimezone(timezone.utc).replace(tzinfo=None)
+    
     sessions = (
         db.query(StudySession)
         .options(joinedload(StudySession.task), joinedload(StudySession.subject))
-        .filter(StudySession.user_id == current_user.id, StudySession.end_time >= now)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.start_time >= today_start_utc  # All sessions from today onwards
+        )
         .order_by(StudySession.start_time.asc())
         .all()
     )
@@ -493,6 +613,9 @@ def _update_task_completion_status(db: Session, task: Task, total_time: int, est
     Auto-completes tasks when total_time >= estimated_minutes.
     However, if a task was manually unmarked (user unchecked it after auto-completion),
     it won't auto-complete again - user must manually mark it complete.
+    
+    Respects manual completion: If a user manually completed a task, it won't be auto-uncompleted
+    even if time drops below the estimate.
     """
     if total_time >= estimated_minutes:
         # Only auto-complete if task is not already completed
@@ -506,12 +629,37 @@ def _update_task_completion_status(db: Session, task: Task, total_time: int, est
                 task.completed_at = datetime.now(timezone.utc)
             _handle_recurring_task_completion(db, task)
     elif task.is_completed and total_time < estimated_minutes:
+        # Only auto-uncomplete if the task was auto-completed, not manually completed
+        # Check if it was likely manually completed:
+        # 1. If prevent_auto_completion is True, user manually completed it early (don't uncomplete)
+        # 2. If completed_at was set recently (within last hour), assume it was manual (don't uncomplete)
+        from datetime import datetime, timezone, timedelta
         from app.models.task import TaskStatus
-        if task.status == "completed" or task.status == TaskStatus.COMPLETED.value:
-            task.is_completed = False
-            task.status = TaskStatus.TODO.value
-            # Clear completed_at when unmarking as complete
-            task.completed_at = None
+        
+        # Check if task was recently manually completed
+        was_recently_manually_completed = False
+        if task.completed_at:
+            now = datetime.now(timezone.utc)
+            # If completed_at is timezone-naive, assume UTC
+            completed_at_aware = task.completed_at
+            if completed_at_aware.tzinfo is None:
+                completed_at_aware = completed_at_aware.replace(tzinfo=timezone.utc)
+            # If completed within last hour, assume it was manual
+            if (now - completed_at_aware) < timedelta(hours=1):
+                was_recently_manually_completed = True
+        
+        # Only auto-uncomplete if:
+        # - It wasn't recently manually completed (completed_at check)
+        # - prevent_auto_completion is False (user didn't manually complete it early)
+        if not was_recently_manually_completed and not task.prevent_auto_completion:
+            # This was likely auto-completed, safe to uncomplete
+            if task.status == "completed" or task.status == TaskStatus.COMPLETED.value:
+                task.is_completed = False
+                task.status = TaskStatus.TODO.value
+                # Clear completed_at when unmarking as complete
+                task.completed_at = None
+        # If it was manually completed (either recently or prevent_auto_completion is True),
+        # respect the user's choice and don't auto-uncomplete
 
 
 def _update_task_progress_from_session(
@@ -567,6 +715,8 @@ def update_session(
         session.status = payload.status
     if payload.notes is not None:
         session.notes = payload.notes
+    if payload.is_pinned is not None:
+        session.is_pinned = payload.is_pinned
     
     if payload.start_time is not None or payload.end_time is not None:
         # Validate duration if both times are provided
@@ -609,6 +759,191 @@ def update_session(
                 _update_task_progress_from_session(db, task, current_user)
     
     db.refresh(session)
+    return _serialize_session(session)
+
+
+@router.post("/sessions", response_model=StudySessionPublic)
+def create_session(
+    payload: StudySessionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> StudySessionPublic:
+    """Create a manual study session.
+    
+    Manual sessions are pinned by default, meaning they won't be deleted
+    when the schedule is regenerated. This allows users to schedule specific
+    tasks at specific times that persist across regenerations.
+    
+    Args:
+        payload: Session creation data including task_id, subject_id, start_time, end_time
+        
+    Returns:
+        The created session
+        
+    Raises:
+        HTTPException 400: If session duration is invalid or times conflict with existing sessions
+        HTTPException 404: If referenced task or subject doesn't exist
+    """
+    from fastapi import HTTPException, status
+    from datetime import timezone
+    
+    # Validate duration
+    duration_minutes = (payload.end_time - payload.start_time).total_seconds() / 60
+    if duration_minutes < 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Session must be at least 5 minutes long."
+        )
+    if duration_minutes > 480:  # 8 hours
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Session cannot be longer than 8 hours."
+        )
+    
+    # Validate task if provided
+    if payload.task_id is not None:
+        task = db.query(Task).filter(
+            Task.id == payload.task_id,
+            Task.user_id == current_user.id
+        ).first()
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found."
+            )
+    
+    # Validate subject if provided
+    if payload.subject_id is not None:
+        subject = db.query(Subject).filter(
+            Subject.id == payload.subject_id,
+            Subject.user_id == current_user.id
+        ).first()
+        if not subject:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Subject not found."
+            )
+    
+    # Convert times to naive UTC for storage
+    start_time = payload.start_time
+    end_time = payload.end_time
+    if start_time.tzinfo is not None:
+        start_time = start_time.astimezone(timezone.utc).replace(tzinfo=None)
+    if end_time.tzinfo is not None:
+        end_time = end_time.astimezone(timezone.utc).replace(tzinfo=None)
+    
+    # Note: We allow creating overlapping sessions for flexibility
+    # The frontend can warn users about conflicts if needed
+    
+    # Create the session
+    session = StudySession(
+        user_id=current_user.id,
+        task_id=payload.task_id,
+        subject_id=payload.subject_id,
+        start_time=start_time,
+        end_time=end_time,
+        status=SessionStatus.PLANNED,
+        is_pinned=payload.is_pinned,  # True by default for manual sessions
+        generated_by="manual",
+    )
+    
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    
+    return _serialize_session(session)
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+def delete_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> None:
+    """Delete a manual/pinned session.
+    
+    Only allows deleting sessions that are:
+    - PLANNED or SKIPPED status (not COMPLETED, PARTIAL, or IN_PROGRESS)
+    - Either pinned (is_pinned=True) or manually created (generated_by='manual')
+    
+    This prevents accidental deletion of:
+    - Completed sessions (historical records)
+    - Active sessions (in progress)
+    - Scheduler-generated sessions (use 'skip' instead, regenerate to replace)
+    """
+    from fastapi import HTTPException, status
+    
+    session = _get_session_or_404(db, session_id, current_user.id)
+    
+    # Only allow deleting PLANNED or SKIPPED sessions
+    if session.status not in [SessionStatus.PLANNED, SessionStatus.SKIPPED]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot delete a {session.status.value} session. Only planned or skipped sessions can be deleted."
+        )
+    
+    # Only allow deleting pinned or manual sessions
+    is_manual_or_pinned = session.is_pinned or session.generated_by == "manual"
+    if not is_manual_or_pinned:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete scheduler-generated sessions. Mark as skipped and regenerate your schedule instead."
+        )
+    
+    db.delete(session)
+    db.commit()
+
+
+@router.post("/sessions/{session_id}/start", response_model=StudySessionPublic)
+def start_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> StudySessionPublic:
+    """Mark a session as IN_PROGRESS when user starts focus mode.
+    
+    This protects the session from being deleted during schedule regeneration.
+    If another session is already IN_PROGRESS, it will be auto-completed as PARTIAL.
+    
+    Returns:
+        The updated session with IN_PROGRESS status
+    """
+    from fastapi import HTTPException, status
+    
+    session = _get_session_or_404(db, session_id, current_user.id)
+    
+    # Validate that the session can be started
+    if session.status == SessionStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot start a completed session."
+        )
+    if session.status == SessionStatus.IN_PROGRESS:
+        # Already in progress, just return it
+        return _serialize_session(session)
+    
+    # Handle any existing IN_PROGRESS sessions (e.g., from another device/tab)
+    # Mark them as PARTIAL since user is starting a new session
+    existing_in_progress = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.status == SessionStatus.IN_PROGRESS,
+            StudySession.id != session_id
+        )
+        .all()
+    )
+    
+    for old_session in existing_in_progress:
+        old_session.status = SessionStatus.PARTIAL
+        db.add(old_session)
+    
+    # Mark the requested session as IN_PROGRESS
+    session.status = SessionStatus.IN_PROGRESS
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    
     return _serialize_session(session)
 
 
@@ -712,6 +1047,7 @@ def _build_session_context(session: StudySession, task, subject, user_tz: str = 
     return {
         "task_title": task_title,
         "task_description": task.description if task else "",
+        "task_notes": task.notes if task else "",
         "subtasks": subtasks_list,
         "subject_name": subject.name if subject else "",
         "subject_difficulty": subject_difficulty,

@@ -28,6 +28,7 @@ class Subtask(BaseModel):
 class TaskBase(BaseModel):
     title: str
     description: str | None = None
+    notes: str | None = None  # User notes for the task
     deadline: datetime | None = None
     estimated_minutes: int = Field(default=60, ge=5)
     actual_minutes_spent: int | None = Field(default=None, ge=0)  # Session time only
@@ -49,6 +50,7 @@ class TaskCreate(TaskBase):
 class TaskUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
+    notes: str | None = None
     deadline: datetime | None = None
     estimated_minutes: int | None = Field(default=None, ge=5)
     actual_minutes_spent: int | None = Field(default=None, ge=0)  # Session time only

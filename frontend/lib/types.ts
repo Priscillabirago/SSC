@@ -66,6 +66,7 @@ export interface Task {
   subject_id?: number | null;
   title: string;
   description?: string | null;
+  notes?: string | null;  // User notes for the task
   deadline?: string | null;
   estimated_minutes: number;
   actual_minutes_spent?: number | null;  // Session time only
@@ -101,6 +102,18 @@ export interface Constraint {
   days_of_week?: number[] | null;
 }
 
+export interface ConstraintCreate {
+  name: string;
+  type?: ConstraintType;
+  description?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  start_datetime?: string | null;
+  end_datetime?: string | null;
+  is_recurring?: boolean;
+  days_of_week?: number[] | null;
+}
+
 export interface StudySession {
   id: number;
   user_id: number;
@@ -108,10 +121,19 @@ export interface StudySession {
   task_id?: number | null;
   start_time: string;
   end_time: string;
-  status: "planned" | "completed" | "skipped" | "partial";
+  status: "planned" | "in_progress" | "completed" | "skipped" | "partial";
   energy_level?: string | null;
   generated_by?: string | null;
+  is_pinned?: boolean;
   focus?: string | null;
+}
+
+export interface StudySessionCreate {
+  task_id?: number | null;
+  subject_id?: number | null;
+  start_time: string;
+  end_time: string;
+  is_pinned?: boolean;
 }
 
 export interface WeeklyPlan {

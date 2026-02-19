@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { format, parseISO } from "date-fns";
-import { CheckCircle2, ChevronDown, ChevronRight, X, Clock, Info, ExternalLink, Calendar as CalendarIcon, Sparkles, Loader2 } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, X, Clock, Info, ExternalLink, Calendar as CalendarIcon, Sparkles, Loader2, Pin, Trash2, AlertCircle, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,40 +11,90 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import type { StudySession, Task, Subject } from "@/lib/types";
 import { formatTime, formatDate, parseBackendDateTime } from "@/lib/utils";
-import { usePrepareSession, useUpdateSession } from "@/features/schedule/hooks";
+import { usePrepareSession, useUpdateSession, useDeleteSession } from "@/features/schedule/hooks";
 import { useTasks, useUpdateTask } from "@/features/tasks/hooks";
 import { useSubjects } from "@/features/subjects/hooks";
 import { toast } from "@/components/ui/use-toast";
 import { AdjustSessionDialog } from "./adjust-session-dialog";
+import { CreateSessionDialog } from "./create-session-dialog";
 import { updateSession as updateSessionApi } from "@/features/schedule/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useFocusSession } from "@/contexts/focus-session-context";
 import { useQuickTrack } from "@/contexts/quick-track-context";
 import { StartTrackingButton } from "@/components/tracking/start-tracking-button";
+import { isSessionMoved, isSessionNew, type ScheduleDiff } from "@/features/schedule/utils/schedule-diff";
 
 interface WeeklyTimelineProps {
   readonly sessions: StudySession[];
+  readonly scheduleDiff?: ScheduleDiff | null;
 }
 
-function getStatusVariant(status: string): "success" | "outline" | "warning" {
-  if (status === "completed") {
+function getStatusVariant(status: string): "success" | "outline" | "warning" | "default" {
+  if (status === "completed" || status === "partial") {
     return "success";
+  }
+  if (status === "in_progress") {
+    return "default";  // Blue/primary color for active sessions
   }
   if (status === "planned") {
     return "outline";
   }
-  return "warning";
+  return "warning";  // skipped or other
 }
 
-export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
+// Helper: Get deadline urgency info (overdue, due today, or normal)
+function getDeadlineUrgency(deadline: string | null | undefined, isCompleted: boolean): { isOverdue: boolean; isDueToday: boolean; bgClass: string; borderClass: string } {
+  if (!deadline || isCompleted) {
+    return { isOverdue: false, isDueToday: false, bgClass: "", borderClass: "" };
+  }
+  
+  const deadlineDate = parseBackendDateTime(deadline);
+  const now = new Date();
+  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const deadlineDateOnlyUTC = new Date(Date.UTC(deadlineDate.getUTCFullYear(), deadlineDate.getUTCMonth(), deadlineDate.getUTCDate()));
+  
+  if (deadlineDateOnlyUTC < todayUTC) {
+    // Overdue - more visible red tint
+    return { 
+      isOverdue: true, 
+      isDueToday: false, 
+      bgClass: "bg-red-50/40", 
+      borderClass: "border-l-red-400" 
+    };
+  } else if (deadlineDateOnlyUTC.getTime() === todayUTC.getTime()) {
+    // Due today - more visible amber tint
+    return { 
+      isOverdue: false, 
+      isDueToday: true, 
+      bgClass: "bg-amber-50/40", 
+      borderClass: "border-l-amber-400" 
+    };
+  }
+  
+  return { isOverdue: false, isDueToday: false, bgClass: "", borderClass: "" };
+}
+
+export function WeeklyTimeline({ sessions, scheduleDiff }: WeeklyTimelineProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { data: tasks } = useTasks();
   const { data: subjects } = useSubjects();
   const updateSession = useUpdateSession();
   const prepareSession = usePrepareSession();
+  const deleteSession = useDeleteSession();
   const updateTask = useUpdateTask();
   const { startSession } = useFocusSession();
   const { stopQuickTrack, isActive: isQuickTrackActive, getElapsedTime, getStartTime } = useQuickTrack();
@@ -53,6 +103,7 @@ export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
   const [loadingPreparation, setLoadingPreparation] = useState<Set<number>>(new Set());
   const [adjustDialogOpen, setAdjustDialogOpen] = useState(false);
   const [sessionToAdjust, setSessionToAdjust] = useState<StudySession | null>(null);
+  const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
 
   const grouped = sessions.reduce<Record<string, StudySession[]>>((acc, session) => {
     // Parse backend datetime (UTC) and format in local time for grouping
@@ -112,6 +163,40 @@ export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
     return subjects.find((s) => s.id === session.subject_id);
   };
 
+  const handleDeleteSession = (sessionId: number, sessionFocus: string | null | undefined) => {
+    setDeletingSessionId(sessionId);
+    deleteSession.mutate(sessionId, {
+      onSuccess: () => {
+        toast({
+          title: "Session deleted",
+          description: sessionFocus ? `"${sessionFocus}" has been removed.` : "Session has been removed.",
+        });
+        setDeletingSessionId(null);
+        // Collapse the deleted session
+        setExpandedSessions((prev) => {
+          const next = new Set(prev);
+          next.delete(sessionId);
+          return next;
+        });
+      },
+      onError: (error: Error) => {
+        toast({
+          variant: "destructive",
+          title: "Failed to delete",
+          description: error.message || "Please try again.",
+        });
+        setDeletingSessionId(null);
+      },
+    });
+  };
+
+  const canDeleteSession = (session: StudySession): boolean => {
+    // Can only delete planned or skipped sessions that are pinned or manual
+    const isPlannedOrSkipped = session.status === "planned" || session.status === "skipped";
+    const isPinnedOrManual = session.is_pinned || session.generated_by === "manual";
+    return isPlannedOrSkipped && isPinnedOrManual;
+  };
+
   const getPriorityClass = (priority: string): string => {
     if (priority === "critical") return "border-red-300 text-red-700";
     if (priority === "high") return "border-amber-300 text-amber-700";
@@ -119,10 +204,10 @@ export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
     return "border-slate-300 text-slate-700";
   };
 
-  // Check if session is late (current time > start time but < end time)
   // Check if session can be adjusted (any session that's not completed/skipped)
+  // In progress sessions can be adjusted (e.g., extend time)
   const canAdjustSession = (session: StudySession): boolean => {
-    return session.status === "planned" || session.status === "partial";
+    return session.status === "planned" || session.status === "partial" || session.status === "in_progress";
   };
 
   const handleGetPreparation = (sessionId: number) => {
@@ -198,21 +283,24 @@ export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center gap-2">
-          <CardTitle>Weekly plan</CardTitle>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-              </TooltipTrigger>
-              <TooltipContent className="max-w-xs">
-                <p className="font-semibold mb-1">Study Sessions</p>
-                <p className="text-xs">
-                  These are time blocks automatically created from your tasks. Click the arrow to see details, or check the box to mark as complete.
-                </p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CardTitle>Weekly plan</CardTitle>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  <p className="font-semibold mb-1">Study Sessions</p>
+                  <p className="text-xs">
+                    These are time blocks automatically created from your tasks. Click the arrow to see details, or check the box to mark as complete.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+          <CreateSessionDialog />
         </div>
       </CardHeader>
       <CardContent className="p-0">
@@ -284,16 +372,27 @@ export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
                       );
 
                       const isCompleted = session.status === "completed";
-                      const isOverdue = task?.deadline && new Date(task.deadline) < new Date() && !isCompleted;
+                      const deadlineUrgency = getDeadlineUrgency(task?.deadline || null, isCompleted);
+                      const wasMoved = isSessionMoved(session, scheduleDiff || null);
+                      const isNew = isSessionNew(session, scheduleDiff || null);
                       
-                      // Determine card styling based on status
-                      let cardClassName = "rounded-xl border-l-4 border border-border/60 bg-white/80 overflow-hidden shadow-sm hover:shadow-md transition-all cursor-pointer ";
+                      // Determine card styling based on status and deadline urgency
+                      let cardClassName = "rounded-xl border-l-4 border border-border/60 overflow-hidden shadow-sm hover:shadow-md transition-all cursor-pointer ";
                       if (isCompleted) {
                         cardClassName += "border-l-green-400 bg-green-50/30";
-                      } else if (isOverdue) {
-                        cardClassName += "border-l-red-400 bg-red-50/20";
+                      } else if (deadlineUrgency.isOverdue) {
+                        cardClassName += `${deadlineUrgency.borderClass} ${deadlineUrgency.bgClass}`;
+                      } else if (deadlineUrgency.isDueToday) {
+                        cardClassName += `${deadlineUrgency.borderClass} ${deadlineUrgency.bgClass}`;
                       } else {
                         cardClassName += "border-l-purple-400 bg-purple-50/20";
+                      }
+                      
+                      // Add visual indicator for moved/new sessions (subtle animation)
+                      if (wasMoved && !isCompleted) {
+                        cardClassName += " ring-2 ring-blue-300/50 ring-offset-1";
+                      } else if (isNew && !isCompleted) {
+                        cardClassName += " ring-2 ring-green-300/50 ring-offset-1";
                       }
                       
                       return (
@@ -335,24 +434,56 @@ export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
                                 </Tooltip>
                               </TooltipProvider>
                               <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                                  <p className="text-sm font-semibold text-foreground truncate">
+                                <div className="space-y-1.5 mb-1.5">
+                                  <p className="text-sm font-semibold text-foreground break-words leading-relaxed">
                                     {task?.title || subject?.name || session.focus || "Study session"}
                                   </p>
-                                  {subject && (
-                                    <Badge variant="outline" className="text-xs h-5 px-2 shrink-0">
-                                      <span
-                                        className="inline-block h-2 w-2 rounded-full mr-1.5"
-                                        style={{ backgroundColor: subject.color }}
-                                      />
-                                      {subject.name}
-                                    </Badge>
-                                  )}
-                                  {task && (task.priority === "high" || task.priority === "critical") && (
-                                    <Badge variant="outline" className={`text-xs h-5 px-2 shrink-0 ${getPriorityClass(task.priority)}`}>
-                                      {task.priority}
-                                    </Badge>
-                                  )}
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    {subject && (
+                                      <Badge variant="outline" className="text-xs h-5 px-2 shrink-0">
+                                        <span
+                                          className="inline-block h-2 w-2 rounded-full mr-1.5"
+                                          style={{ backgroundColor: subject.color }}
+                                        />
+                                        {subject.name}
+                                      </Badge>
+                                    )}
+                                    {task && (task.priority === "high" || task.priority === "critical") && (
+                                      <Badge variant="outline" className={`text-xs h-5 px-2 shrink-0 ${getPriorityClass(task.priority)}`}>
+                                        {task.priority}
+                                      </Badge>
+                                    )}
+                                    {wasMoved && !isCompleted && (
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Badge variant="outline" className="text-xs h-5 px-2 shrink-0 border-blue-300 text-blue-700 bg-blue-50/50">
+                                              <Clock className="h-3 w-3 mr-1" />
+                                              Moved
+                                            </Badge>
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            <p>This session was rescheduled</p>
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                    )}
+                                    {isNew && !isCompleted && (
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Badge variant="outline" className="text-xs h-5 px-2 shrink-0 border-green-300 text-green-700 bg-green-50/50">
+                                              <Plus className="h-3 w-3 mr-1" />
+                                              New
+                                            </Badge>
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            <p>This is a new session</p>
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                    )}
+                                  </div>
                                 </div>
                                 <div className="flex items-center gap-2 text-xs">
                                   <div className="flex items-center gap-1.5 text-foreground font-medium">
@@ -367,7 +498,9 @@ export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
                                   {task?.deadline && (
                                     <>
                                       <span className="text-muted-foreground/40">•</span>
-                                      <span className={`${isOverdue ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                                      <span className={`flex items-center gap-1 ${deadlineUrgency.isOverdue ? "text-red-600 font-medium" : deadlineUrgency.isDueToday ? "text-amber-600 font-medium" : "text-muted-foreground"}`}>
+                                        {deadlineUrgency.isOverdue && <AlertCircle className="h-3 w-3" />}
+                                        {deadlineUrgency.isDueToday && <Clock className="h-3 w-3" />}
                                         Due {formatDate(task.deadline)}
                                       </span>
                                     </>
@@ -376,6 +509,18 @@ export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
                               </div>
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
+                              {session.is_pinned && (
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Pin className="h-3.5 w-3.5 text-purple-500" />
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p className="text-xs">Pinned - won't be deleted on regeneration</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              )}
                               <Badge 
                                 variant={getStatusVariant(session.status)}
                                 className={`text-xs h-5 px-2 ${
@@ -495,6 +640,38 @@ export function WeeklyTimeline({ sessions }: WeeklyTimelineProps) {
                                     <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
                                     Edit Task
                                   </Button>
+                                )}
+                                {canDeleteSession(session) && (
+                                  <AlertDialog>
+                                    <AlertDialogTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-8 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                                        disabled={deletingSessionId === session.id}
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                                        {deletingSessionId === session.id ? "Deleting..." : "Delete"}
+                                      </Button>
+                                    </AlertDialogTrigger>
+                                    <AlertDialogContent>
+                                      <AlertDialogHeader>
+                                        <AlertDialogTitle>Delete this session?</AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                          This will permanently remove "{session.focus || "this session"}" from your schedule. This action cannot be undone.
+                                        </AlertDialogDescription>
+                                      </AlertDialogHeader>
+                                      <AlertDialogFooter>
+                                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                        <AlertDialogAction
+                                          onClick={() => handleDeleteSession(session.id, session.focus)}
+                                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                        >
+                                          Delete
+                                        </AlertDialogAction>
+                                      </AlertDialogFooter>
+                                    </AlertDialogContent>
+                                  </AlertDialog>
                                 )}
                               </div>
                               
