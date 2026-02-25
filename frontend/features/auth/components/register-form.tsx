@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Eye, EyeOff } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -67,6 +67,12 @@ const timezoneAliases: Record<string, string> = {
   "Asia/Calcutta": "Asia/Kolkata",
   "Asia/Katmandu": "Asia/Kathmandu",
   "America/Argentina/Buenos_Aires": "America/Buenos_Aires",
+  "Etc/UTC": "UTC",
+  "Etc/GMT": "UTC",
+  "Etc/GMT+0": "UTC",
+  "Etc/GMT-0": "UTC",
+  "Etc/Greenwich": "UTC",
+  GMT: "UTC",
 };
 
 function normalizeTimezone(tz?: string): string | null {
@@ -74,9 +80,8 @@ function normalizeTimezone(tz?: string): string | null {
   return timezoneAliases[tz] ?? tz;
 }
 
-function isSupportedTimezone(tz?: string): tz is string {
-  const normalized = normalizeTimezone(tz);
-  return Boolean(normalized && timezones.some((t) => t.value === normalized));
+function isInTimezoneList(tz: string): boolean {
+  return timezones.some((t) => t.value === tz);
 }
 
 type PasswordStrength = "weak" | "medium" | "strong" | "";
@@ -161,16 +166,18 @@ function useRegisterFormState() {
     fullNameInputRef.current?.focus();
   }, []);
 
-  // Auto-detect timezone
+  // Auto-detect timezone - use any valid IANA zone from the browser
   useEffect(() => {
     try {
       const detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const normalized = normalizeTimezone(detectedTimezone);
-      if (isSupportedTimezone(normalized || undefined)) {
-        setTimezone(normalized!);
+      const normalized = normalizeTimezone(detectedTimezone) ?? detectedTimezone;
+      // Use detected zone if it looks like a valid IANA identifier (Region/City)
+      if (normalized && /^[A-Za-z]+\/[A-Za-z_]+/.test(normalized)) {
+        setTimezone(normalized);
+      } else if (normalized === "UTC") {
+        setTimezone("UTC");
       }
     } catch (error) {
-      // Fallback to UTC if detection fails - silently use default
       console.debug("Timezone detection failed, using UTC default", error);
     }
   }, []);
@@ -210,11 +217,18 @@ function useRegisterFormState() {
     };
   };
 
+  // Build options so current timezone is always present (fixes Radix placeholder when value not in list)
+  const timezoneOptions = useMemo(() => {
+    if (!timezone || isInTimezoneList(timezone)) return timezones;
+    return [{ value: timezone, label: `${timezone} (detected)` }, ...timezones];
+  }, [timezone]);
+
   return {
     email,
     fullName,
     password,
     timezone,
+    timezoneOptions,
     showPassword,
     emailError,
     fullNameError,
@@ -240,6 +254,7 @@ export function RegisterForm() {
     fullName,
     password,
     timezone,
+    timezoneOptions,
     showPassword,
     emailError,
     fullNameError,
@@ -400,7 +415,7 @@ export function RegisterForm() {
               })()}
             </div>
             <p className="text-xs text-muted-foreground">
-              Use at least 8 characters with a mix of letters, numbers, and symbols.
+              At least 8 characters. Mix of letters, numbers, and symbols recommended for strength.
             </p>
           </div>
         )}
@@ -412,12 +427,12 @@ export function RegisterForm() {
       </div>
       <div className="space-y-2">
         <Label htmlFor="timezone">Default timezone</Label>
-        <Select value={timezone} onValueChange={setTimezone} disabled={isSubmitting}>
+        <Select value={timezone || "UTC"} onValueChange={setTimezone} disabled={isSubmitting}>
           <SelectTrigger id="timezone">
             <SelectValue placeholder="Select timezone" />
           </SelectTrigger>
           <SelectContent>
-            {timezones.map((zone) => (
+            {timezoneOptions.map((zone) => (
               <SelectItem key={zone.value} value={zone.value}>
                 {zone.label}
               </SelectItem>

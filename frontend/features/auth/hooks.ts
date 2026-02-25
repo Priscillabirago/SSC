@@ -65,7 +65,7 @@ export function useRegister() {
         title: "Registration failed",
         description: extractErrorMessage(
           error,
-          "Please double-check your details (password must be at least 8 characters)."
+          "Please double-check your details and try again."
         )
       });
     }
