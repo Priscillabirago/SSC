@@ -6,6 +6,7 @@ Alembic to head. On an existing database, runs Alembic migrations normally.
 
 import subprocess
 import sys
+import traceback
 
 from sqlalchemy import inspect
 
@@ -34,4 +35,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print("Startup failed:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)

@@ -2,7 +2,7 @@ from functools import lru_cache
 from typing import Literal
 
 from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator
+from pydantic import Field, computed_field
 
 _LOCALHOST_ORIGINS = [
     "http://localhost:3000",
@@ -26,18 +26,15 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, env="OPENAI_API_KEY")
     gemini_api_key: str | None = Field(default=None, env="GEMINI_API_KEY")
 
-    cors_origins: list[str] = Field(default=_LOCALHOST_ORIGINS)
+    cors_origins_env: str | None = Field(default=None, env="CORS_ORIGINS")
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v):
-        if isinstance(v, str):
-            origins = [o.strip() for o in v.split(",") if o.strip()]
-        elif isinstance(v, list):
-            origins = v
-        else:
-            origins = _LOCALHOST_ORIGINS
-        return list(set(origins + _LOCALHOST_ORIGINS))
+    @computed_field
+    @property
+    def cors_origins(self) -> list[str]:
+        if self.cors_origins_env:
+            origins = [o.strip() for o in self.cors_origins_env.split(",") if o.strip()]
+            return list(set(origins + _LOCALHOST_ORIGINS))
+        return _LOCALHOST_ORIGINS
 
     class Config:
         env_file = ".env"
