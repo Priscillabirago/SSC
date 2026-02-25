@@ -4,9 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import api_router
 from app.core.config import get_settings
 
-app = FastAPI()
-
 settings = get_settings()
+
+app = FastAPI(
+    docs_url="/docs" if settings.environment == "development" else None,
+    redoc_url="/redoc" if settings.environment == "development" else None,
+)
 
 app.add_middleware(
     CORSMiddleware,

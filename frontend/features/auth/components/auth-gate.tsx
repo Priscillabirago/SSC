@@ -11,7 +11,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const token = getAccessToken();
-    const isAuthRoute = pathname?.startsWith("/login") || pathname?.startsWith("/register");
+    const isAuthRoute = pathname?.startsWith("/login") || pathname?.startsWith("/register")
+      || pathname?.startsWith("/forgot-password") || pathname?.startsWith("/reset-password");
     if (!token && !isAuthRoute) {
       router.replace("/login");
     }

@@ -1,6 +1,7 @@
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
@@ -583,9 +584,17 @@ def _update_session_times(
     
     if conflicting_session:
         conflict_name = _get_conflict_name(conflicting_session)
+        # Show times in user's timezone (sessions are stored as naive UTC)
+        try:
+            user_tz = ZoneInfo(current_user.timezone or "UTC")
+        except Exception:
+            user_tz = ZoneInfo("UTC")
+        conflict_start = conflicting_session.start_time.replace(tzinfo=timezone.utc).astimezone(user_tz)
+        conflict_end = conflicting_session.end_time.replace(tzinfo=timezone.utc).astimezone(user_tz)
+        time_str = f"{conflict_start.strftime('%I:%M %p')} - {conflict_end.strftime('%I:%M %p')}"
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"This time conflicts with: {conflict_name} ({conflicting_session.start_time.strftime('%I:%M %p')} - {conflicting_session.end_time.strftime('%I:%M %p')})"
+            detail=f"This time conflicts with: {conflict_name} ({time_str})"
         )
     
     # Store as naive UTC (strip timezone if present)
