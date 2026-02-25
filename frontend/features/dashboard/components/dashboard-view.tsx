@@ -66,6 +66,16 @@ export function DashboardView() {
   if (hasNoData) {
     return (
       <div className="space-y-6">
+        {/* First-run welcome banner */}
+        <div className="rounded-xl border border-primary/20 bg-gradient-to-r from-primary/5 via-primary/[0.02] to-transparent px-4 py-3">
+          <p className="text-sm font-medium text-foreground">
+            Welcome! New here? Follow the steps below — your first study plan is just a few minutes away.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Add subjects → Create tasks → Generate your schedule
+          </p>
+        </div>
+
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Dashboard</h1>

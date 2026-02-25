@@ -1,6 +1,10 @@
-# SSC (Smart Study Companion) 
+# SSC (Smart Study Companion)
 
 An AI-driven study organizer and academic coach for students. Features intelligent scheduling, task management, focus sessions, and personalized coaching.
+
+**[Try it live →](https://ssc-eight-psi.vercel.app)**
+
+You can also clone this repo and run it locally (see [Local Development](#local-development)).
 
 ## Key Features
 
@@ -18,38 +22,40 @@ An AI-driven study organizer and academic coach for students. Features intellige
 - **AI**: OpenAI / Google Gemini integration
 - **Database**: SQLite (development) / PostgreSQL (production)
 
-## Backend Setup (Simplified)
+## Local Development
 
-### 1. Set Environment Variables
+### 1. Backend Setup
 
-Edit `env/backend.env` to set your database and API keys, for example:
-
-```
-DATABASE_URL=sqlite:///../smart_study_companion.db
-JWT_SECRET_KEY=change-me
-AI_PROVIDER=openai
-OPENAI_API_KEY=your-openai-key
-GEMINI_API_KEY=
-```
-
-### 2. Install Python Dependencies and Run Backend
+Create `backend/.env` (see `.env.example` at project root for reference). For local dev with SQLite:
 
 ```
-cd backend
+DATABASE_URL=sqlite:///smart_study_companion.db
+JWT_SECRET_KEY=change-me-for-local
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your-key
+```
+
+Install dependencies and run:
+
+```bash
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+python start.py       # creates DB tables if needed
+uvicorn app.main:app --reload --port 8000
 ```
 
-- The backend will use a local SQLite file (`../smart_study_companion.db`) for storage.
+API docs: http://localhost:8000/docs
 
+### 2. Frontend Setup
 
-## 3. Frontend Setup (from project root)
+Create `frontend/.env.local` with `NEXT_PUBLIC_API_URL=http://localhost:8000` for local backend.
 
-```
-cd frontend
+```bash
 npm install
 npm run dev
 ```
 
+Frontend: http://localhost:3000
 
+### Alternative: Full setup script
 
+If you have PostgreSQL running locally, you can use `./setup-local.sh` then `./start-local.sh`. See those scripts for details.
