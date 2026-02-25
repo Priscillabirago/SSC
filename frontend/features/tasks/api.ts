@@ -30,3 +30,18 @@ export async function getTemplateForInstance(taskId: number): Promise<Task> {
   return data;
 }
 
+export interface TaskSession {
+  id: number;
+  start_time: string;
+  end_time: string;
+  duration_minutes: number;
+  status: "planned" | "in_progress" | "completed" | "skipped" | "partial";
+  energy_level?: string | null;
+  subject_name?: string | null;
+}
+
+export async function listTaskSessions(taskId: number): Promise<TaskSession[]> {
+  const { data } = await api.get<TaskSession[]>(`/tasks/${taskId}/sessions`);
+  return data;
+}
+

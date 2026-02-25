@@ -1,7 +1,9 @@
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -1081,4 +1083,276 @@ def prepare_session(
         strategy=response.get("strategy", "Active Recall"),
         rationale=response.get("rationale", "Evidence-based study methods improve retention and efficiency.")
     )
+
+
+# ---------------------------------------------------------------------------
+# Calendar export endpoints
+# ---------------------------------------------------------------------------
+
+_ICAL_DAY_ABBR = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
+
+
+def _build_ics_calendar(
+    sessions: list[StudySession],
+    constraints: list[ScheduleConstraint],
+    user: User,
+) -> bytes:
+    """Build an iCalendar (.ics) file from study sessions and constraints."""
+    from icalendar import Calendar, Event
+
+    cal = Calendar()
+    cal.add("prodid", "-//Smart Study Companion//SSC//EN")
+    cal.add("version", "2.0")
+    cal.add("calscale", "GREGORIAN")
+    cal.add("x-wr-calname", "SSC Study Sessions")
+    cal.add("x-wr-timezone", user.timezone or "UTC")
+    cal.add("x-published-ttl", "PT1H")
+
+    # --- study sessions ---
+    for session in sessions:
+        event = Event()
+        event.add("uid", f"ssc-session-{session.id}@smartstudycompanion")
+
+        focus = _session_focus(session) or "Study Session"
+        event.add("summary", focus)
+
+        start = session.start_time.replace(tzinfo=timezone.utc) if session.start_time.tzinfo is None else session.start_time
+        end = session.end_time.replace(tzinfo=timezone.utc) if session.end_time.tzinfo is None else session.end_time
+        event.add("dtstart", start)
+        event.add("dtend", end)
+
+        desc_parts: list[str] = []
+        if session.subject:
+            desc_parts.append(f"Subject: {session.subject.name}")
+        if session.task:
+            if session.task.priority:
+                desc_parts.append(f"Priority: {session.task.priority.value}")
+            if session.task.description:
+                desc_parts.append(f"\n{session.task.description}")
+        desc_parts.append(f"Status: {session.status.value}")
+        event.add("description", "\n".join(desc_parts))
+
+        status_map = {
+            SessionStatus.PLANNED: "TENTATIVE",
+            SessionStatus.IN_PROGRESS: "CONFIRMED",
+            SessionStatus.COMPLETED: "CONFIRMED",
+            SessionStatus.PARTIAL: "CONFIRMED",
+            SessionStatus.SKIPPED: "CANCELLED",
+        }
+        event.add("status", status_map.get(session.status, "TENTATIVE"))
+        event.add("dtstamp", datetime.now(timezone.utc))
+        cal.add_component(event)
+
+    # --- constraints / blocked times ---
+    for constraint in constraints:
+        _add_constraint_events(cal, constraint, user)
+
+    return cal.to_ical()
+
+
+def _add_constraint_events(cal, constraint: ScheduleConstraint, user: User) -> None:
+    """Add one or more iCal events for a constraint."""
+    from icalendar import Event
+    from zoneinfo import ZoneInfo
+
+    type_labels = {
+        "class": "Class",
+        "busy": "Busy",
+        "blocked": "Blocked",
+        "no_study": "No Study",
+    }
+    label = type_labels.get(constraint.type.value if hasattr(constraint.type, "value") else str(constraint.type), "Blocked")
+    summary = f"[{label}] {constraint.name}"
+
+    try:
+        user_tz = ZoneInfo(user.timezone)
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+
+    if constraint.is_recurring and constraint.start_time and constraint.end_time and constraint.days_of_week:
+        _add_recurring_constraint(cal, constraint, summary, user_tz)
+    elif constraint.start_datetime and constraint.end_datetime:
+        _add_oneoff_constraint(cal, constraint, summary)
+
+
+def _add_recurring_constraint(cal, constraint: ScheduleConstraint, summary: str, user_tz) -> None:
+    """Add a recurring constraint as an iCal event with RRULE."""
+    from icalendar import Event, vRecur
+
+    event = Event()
+    event.add("uid", f"ssc-constraint-{constraint.id}@smartstudycompanion")
+    event.add("summary", summary)
+    if constraint.description:
+        event.add("description", constraint.description)
+
+    # Build a DTSTART in the user's local timezone for the first applicable day
+    # Use today as reference, find the next matching day
+    today = datetime.now(user_tz).date()
+    days = sorted(constraint.days_of_week) if constraint.days_of_week else []
+    if not days:
+        return
+
+    # Find the first matching weekday from today
+    first_day = None
+    for offset in range(7):
+        candidate = today + timedelta(days=offset)
+        if candidate.weekday() in days:
+            first_day = candidate
+            break
+    if not first_day:
+        first_day = today
+
+    start_dt = datetime.combine(first_day, constraint.start_time, tzinfo=user_tz)
+    end_dt = datetime.combine(first_day, constraint.end_time, tzinfo=user_tz)
+
+    # Handle overnight constraints (end < start means crosses midnight)
+    if constraint.end_time <= constraint.start_time:
+        end_dt += timedelta(days=1)
+
+    event.add("dtstart", start_dt)
+    event.add("dtend", end_dt)
+
+    ical_days = [_ICAL_DAY_ABBR[d] for d in days if 0 <= d <= 6]
+    event.add("rrule", vRecur({"FREQ": "WEEKLY", "BYDAY": ical_days}))
+
+    event.add("dtstamp", datetime.now(timezone.utc))
+    event.add("transp", "OPAQUE")
+    cal.add_component(event)
+
+
+def _add_oneoff_constraint(cal, constraint: ScheduleConstraint, summary: str) -> None:
+    """Add a one-off constraint as a single iCal event."""
+    from icalendar import Event
+
+    event = Event()
+    event.add("uid", f"ssc-constraint-{constraint.id}@smartstudycompanion")
+    event.add("summary", summary)
+    if constraint.description:
+        event.add("description", constraint.description)
+
+    start = constraint.start_datetime
+    end = constraint.end_datetime
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+
+    event.add("dtstart", start)
+    event.add("dtend", end)
+    event.add("dtstamp", datetime.now(timezone.utc))
+    event.add("transp", "OPAQUE")
+    cal.add_component(event)
+
+
+def _get_calendar_data(db: Session, user: User) -> tuple[list[StudySession], list[ScheduleConstraint]]:
+    """Fetch sessions and constraints for calendar export."""
+    from sqlalchemy.orm import joinedload
+
+    now = datetime.now(timezone.utc)
+    window_start = (now - timedelta(days=7)).replace(tzinfo=None)
+    window_end = (now + timedelta(weeks=4)).replace(tzinfo=None)
+
+    sessions = (
+        db.query(StudySession)
+        .options(joinedload(StudySession.task), joinedload(StudySession.subject))
+        .filter(
+            StudySession.user_id == user.id,
+            StudySession.start_time >= window_start,
+            StudySession.start_time <= window_end,
+        )
+        .order_by(StudySession.start_time.asc())
+        .all()
+    )
+
+    constraints = (
+        db.query(ScheduleConstraint)
+        .filter(ScheduleConstraint.user_id == user.id)
+        .all()
+    )
+
+    return sessions, constraints
+
+
+@router.get("/calendar/feed")
+def calendar_feed(
+    token: str = Query(..., description="Per-user calendar token"),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Public iCal feed authenticated via per-user token.
+
+    Calendar apps (Google Calendar, Apple Calendar, Outlook) subscribe to this
+    URL and poll it periodically to stay in sync.
+    """
+    from fastapi import HTTPException, status
+
+    user = db.query(User).filter(User.calendar_token == token).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid calendar token",
+        )
+
+    sessions, constraints = _get_calendar_data(db, user)
+    ics_bytes = _build_ics_calendar(sessions, constraints, user)
+
+    return Response(
+        content=ics_bytes,
+        media_type="text/calendar; charset=utf-8",
+        headers={
+            "Content-Disposition": "attachment; filename=ssc-study-sessions.ics",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        },
+    )
+
+
+@router.get("/calendar/download")
+def calendar_download(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> Response:
+    """Download an .ics file of study sessions and constraints (JWT-authenticated)."""
+    sessions, constraints = _get_calendar_data(db, current_user)
+    ics_bytes = _build_ics_calendar(sessions, constraints, current_user)
+
+    return Response(
+        content=ics_bytes,
+        media_type="text/calendar; charset=utf-8",
+        headers={
+            "Content-Disposition": "attachment; filename=ssc-study-sessions.ics",
+        },
+    )
+
+
+@router.post("/calendar/token")
+def generate_calendar_token(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict[str, str]:
+    """Generate or regenerate a calendar subscription token."""
+    current_user.calendar_token = secrets.token_urlsafe(32)
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return {"calendar_token": current_user.calendar_token}
+
+
+@router.delete("/calendar/token")
+def revoke_calendar_token(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict[str, str]:
+    """Revoke the calendar subscription token."""
+    current_user.calendar_token = None
+    db.add(current_user)
+    db.commit()
+    return {"message": "Calendar token revoked"}
+
+
+@router.get("/calendar/token")
+def get_calendar_token(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict[str, str | None]:
+    """Get the current calendar token (if any)."""
+    return {"calendar_token": current_user.calendar_token}
 

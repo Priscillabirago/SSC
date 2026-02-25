@@ -27,7 +27,7 @@ import { formatTime, formatDate, parseBackendDateTime } from "@/lib/utils";
 import { usePrepareSession, useUpdateSession, useDeleteSession } from "@/features/schedule/hooks";
 import { useTasks, useUpdateTask } from "@/features/tasks/hooks";
 import { useSubjects } from "@/features/subjects/hooks";
-import { toast } from "@/components/ui/use-toast";
+import { toast, ToastAction } from "@/components/ui/use-toast";
 import { AdjustSessionDialog } from "./adjust-session-dialog";
 import { CreateSessionDialog } from "./create-session-dialog";
 import { updateSession as updateSessionApi } from "@/features/schedule/api";
@@ -87,6 +87,34 @@ function getDeadlineUrgency(deadline: string | null | undefined, isCompleted: bo
   return { isOverdue: false, isDueToday: false, bgClass: "", borderClass: "" };
 }
 
+function getDeadlineTextClass(urgency: { isOverdue: boolean; isDueToday: boolean }): string {
+  if (urgency.isOverdue) return "text-red-600 font-medium";
+  if (urgency.isDueToday) return "text-amber-600 font-medium";
+  return "text-muted-foreground";
+}
+
+function getCardClassName(
+  isCompleted: boolean,
+  deadlineUrgency: { isOverdue: boolean; isDueToday: boolean; bgClass: string; borderClass: string },
+  sessionStatus: string,
+  wasMoved: boolean,
+  isNew: boolean,
+): string {
+  let cls = "rounded-xl border-l-4 border border-border/60 overflow-hidden shadow-sm hover:shadow-md transition-all cursor-pointer ";
+  if (isCompleted) {
+    cls += "border-l-green-400 bg-green-50/30";
+  } else if (deadlineUrgency.isOverdue) {
+    cls += `${deadlineUrgency.borderClass} ${deadlineUrgency.bgClass}`;
+  } else if (deadlineUrgency.isDueToday) {
+    cls += `${deadlineUrgency.borderClass} ${deadlineUrgency.bgClass}`;
+  } else {
+    cls += "border-l-purple-400 bg-purple-50/20";
+  }
+  if (wasMoved) cls += " ring-2 ring-blue-300/50 ring-offset-1";
+  else if (isNew) cls += " ring-2 ring-green-300/50 ring-offset-1";
+  return cls;
+}
+
 export function WeeklyTimeline({ sessions, scheduleDiff }: WeeklyTimelineProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -130,6 +158,9 @@ export function WeeklyTimeline({ sessions, scheduleDiff }: WeeklyTimelineProps) 
   };
 
   const handleStatusChange = (session: StudySession, newStatus: StudySession["status"]) => {
+    const previousStatus = session.status;
+    if (previousStatus === newStatus) return;
+
     updateSession.mutate(
       {
         sessionId: session.id,
@@ -137,9 +168,48 @@ export function WeeklyTimeline({ sessions, scheduleDiff }: WeeklyTimelineProps) 
       },
       {
         onSuccess: () => {
+          const statusLabels: Record<string, string> = {
+            completed: "completed",
+            partial: "partial",
+            skipped: "skipped",
+            planned: "planned",
+            in_progress: "in progress",
+          };
+
           toast({
             title: "Session updated",
-            description: `Marked as ${newStatus}`,
+            description: `Marked as ${statusLabels[newStatus] ?? newStatus}`,
+            duration: 6000,
+            action: (
+              <ToastAction
+                altText="Undo status change"
+                onClick={() => {
+                  updateSession.mutate(
+                    {
+                      sessionId: session.id,
+                      payload: { status: previousStatus },
+                    },
+                    {
+                      onSuccess: () => {
+                        toast({
+                          title: "Undone",
+                          description: `Reverted to ${statusLabels[previousStatus] ?? previousStatus}`,
+                        });
+                      },
+                      onError: () => {
+                        toast({
+                          variant: "destructive",
+                          title: "Undo failed",
+                          description: "Could not revert the status. Please try manually.",
+                        });
+                      },
+                    }
+                  );
+                }}
+              >
+                Undo
+              </ToastAction>
+            ),
           });
         },
         onError: (error) => {
@@ -188,6 +258,44 @@ export function WeeklyTimeline({ sessions, scheduleDiff }: WeeklyTimelineProps) 
         setDeletingSessionId(null);
       },
     });
+  };
+
+  const handleFocusSessionStart = (session: StudySession) => {
+    const sessionTask = getTaskForSession(session);
+    const sessionSubject = getSubjectForSession(session);
+
+    const quickTrackStartTime = sessionTask && isQuickTrackActive(sessionTask.id)
+      ? getStartTime(sessionTask.id)
+      : null;
+
+    const quickTrackTimeMs = sessionTask && isQuickTrackActive(sessionTask.id)
+      ? getElapsedTime(sessionTask.id) * 60 * 1000
+      : 0;
+
+    const beginFocus = () => {
+      startSession(session, sessionTask || null, sessionSubject || null, quickTrackTimeMs, quickTrackStartTime);
+      toast({ title: "Focus session started", description: "Entering focus mode..." });
+    };
+
+    if (sessionTask && isQuickTrackActive(sessionTask.id)) {
+      const elapsed = stopQuickTrack(sessionTask.id, true);
+      const currentTimer = sessionTask.timer_minutes_spent ?? 0;
+      updateTask.mutate(
+        { id: sessionTask.id, payload: { timer_minutes_spent: currentTimer + elapsed } },
+        {
+          onSuccess: beginFocus,
+          onError: () => {
+            toast({
+              variant: "destructive",
+              title: "Failed to save Quick Track time",
+              description: "Could not convert to Focus Mode. Please try again.",
+            });
+          },
+        }
+      );
+    } else {
+      beginFocus();
+    }
   };
 
   const canDeleteSession = (session: StudySession): boolean => {
@@ -310,17 +418,21 @@ export function WeeklyTimeline({ sessions, scheduleDiff }: WeeklyTimelineProps) 
               <CalendarIcon className="h-16 w-16 text-muted-foreground/30 mx-auto mb-4" />
               <p className="text-sm font-medium text-foreground mb-1">No sessions scheduled</p>
               <p className="text-xs text-muted-foreground mb-4">
-                Generate a schedule from your tasks to see your study plan here.
+                {(tasks?.filter(t => !t.is_completed && !t.is_recurring_template).length ?? 0) > 0
+                  ? "Hit \"Generate week\" above to create your study plan."
+                  : "Add some tasks first, then generate your schedule."}
               </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => router.push("/tasks")}
-                className="gap-2"
-              >
-                <ExternalLink className="h-3 w-3" />
-                Go to Tasks
-              </Button>
+              {(tasks?.filter(t => !t.is_completed && !t.is_recurring_template).length ?? 0) === 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push("/tasks")}
+                  className="gap-2"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  Go to Tasks
+                </Button>
+              )}
             </div>
           ) : (
             <div className="space-y-6">
@@ -373,27 +485,9 @@ export function WeeklyTimeline({ sessions, scheduleDiff }: WeeklyTimelineProps) 
 
                       const isCompleted = session.status === "completed";
                       const deadlineUrgency = getDeadlineUrgency(task?.deadline || null, isCompleted);
-                      const wasMoved = isSessionMoved(session, scheduleDiff || null);
-                      const isNew = isSessionNew(session, scheduleDiff || null);
-                      
-                      // Determine card styling based on status and deadline urgency
-                      let cardClassName = "rounded-xl border-l-4 border border-border/60 overflow-hidden shadow-sm hover:shadow-md transition-all cursor-pointer ";
-                      if (isCompleted) {
-                        cardClassName += "border-l-green-400 bg-green-50/30";
-                      } else if (deadlineUrgency.isOverdue) {
-                        cardClassName += `${deadlineUrgency.borderClass} ${deadlineUrgency.bgClass}`;
-                      } else if (deadlineUrgency.isDueToday) {
-                        cardClassName += `${deadlineUrgency.borderClass} ${deadlineUrgency.bgClass}`;
-                      } else {
-                        cardClassName += "border-l-purple-400 bg-purple-50/20";
-                      }
-                      
-                      // Add visual indicator for moved/new sessions (subtle animation)
-                      if (wasMoved && !isCompleted) {
-                        cardClassName += " ring-2 ring-blue-300/50 ring-offset-1";
-                      } else if (isNew && !isCompleted) {
-                        cardClassName += " ring-2 ring-green-300/50 ring-offset-1";
-                      }
+                      const wasMoved = isSessionMoved(session, scheduleDiff || null) && !isCompleted;
+                      const isNew = isSessionNew(session, scheduleDiff || null) && !isCompleted;
+                      const cardClassName = getCardClassName(isCompleted, deadlineUrgency, session.status, wasMoved, isNew);
                       
                       return (
                         <div
@@ -498,7 +592,7 @@ export function WeeklyTimeline({ sessions, scheduleDiff }: WeeklyTimelineProps) 
                                   {task?.deadline && (
                                     <>
                                       <span className="text-muted-foreground/40">•</span>
-                                      <span className={`flex items-center gap-1 ${deadlineUrgency.isOverdue ? "text-red-600 font-medium" : deadlineUrgency.isDueToday ? "text-amber-600 font-medium" : "text-muted-foreground"}`}>
+                                      <span className={`flex items-center gap-1 ${getDeadlineTextClass(deadlineUrgency)}`}>
                                         {deadlineUrgency.isOverdue && <AlertCircle className="h-3 w-3" />}
                                         {deadlineUrgency.isDueToday && <Clock className="h-3 w-3" />}
                                         Due {formatDate(task.deadline)}
@@ -561,59 +655,7 @@ export function WeeklyTimeline({ sessions, scheduleDiff }: WeeklyTimelineProps) 
                                     size="sm"
                                     className="h-8 text-xs"
                                     showQuickTrack={false}
-                                    onFocusSessionStart={() => {
-                                      const sessionTask = getTaskForSession(session);
-                                      const sessionSubject = getSubjectForSession(session);
-                                      
-                                      // Get Quick Track start time BEFORE stopping (since stopQuickTrack removes it)
-                                      const quickTrackStartTime = sessionTask && isQuickTrackActive(sessionTask.id)
-                                        ? getStartTime(sessionTask.id)
-                                        : null;
-                                      
-                                      // Calculate Quick Track time if active
-                                      const quickTrackTimeMs = sessionTask && isQuickTrackActive(sessionTask.id)
-                                        ? getElapsedTime(sessionTask.id) * 60 * 1000
-                                        : 0;
-                                      
-                                      // Helper to start Focus Mode (called after Quick Track time is saved)
-                                      const startFocusMode = () => {
-                                        startSession(session, sessionTask || null, sessionSubject || null, quickTrackTimeMs, quickTrackStartTime);
-                                        toast({
-                                          title: "Focus session started",
-                                          description: "Entering focus mode...",
-                                        });
-                                      };
-                                      
-                                      // Stop Quick Track if active and save time - wait for mutation to complete
-                                      if (sessionTask && isQuickTrackActive(sessionTask.id)) {
-                                        const elapsed = stopQuickTrack(sessionTask.id, true);
-                                        const currentTimer = sessionTask.timer_minutes_spent ?? 0;
-                                        updateTask.mutate(
-                                          {
-                                            id: sessionTask.id,
-                                            payload: {
-                                              timer_minutes_spent: currentTimer + elapsed,
-                                            },
-                                          },
-                                          {
-                                            onSuccess: () => {
-                                              // Only start Focus Mode after Quick Track time is successfully saved
-                                              startFocusMode();
-                                            },
-                                            onError: () => {
-                                              toast({
-                                                variant: "destructive",
-                                                title: "Failed to save Quick Track time",
-                                                description: "Could not convert to Focus Mode. Please try again.",
-                                              });
-                                            },
-                                          }
-                                        );
-                                      } else {
-                                        // No Quick Track active, start Focus Mode immediately
-                                        startFocusMode();
-                                      }
-                                    }}
+                                    onFocusSessionStart={() => handleFocusSessionStart(session)}
                                   />
                                 )}
                                 {canAdjustSession(session) && (

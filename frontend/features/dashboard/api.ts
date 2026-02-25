@@ -24,3 +24,28 @@ export async function fetchDashboardInsights(): Promise<DashboardInsights> {
   return data;
 }
 
+export interface WeeklyRecapData {
+  has_data: boolean;
+  recap: string | null;
+  highlight?: string;
+  concern?: string | null;
+  actions?: string[];
+  tone?: "celebratory" | "encouraging" | "honest";
+  stats?: {
+    sessions_completed: number;
+    sessions_total: number;
+    hours_studied: number;
+    hours_target: number;
+    adherence: number;
+    tasks_completed: number;
+    streak: number;
+  };
+  week_start: string;
+  week_end: string;
+}
+
+export async function fetchWeeklyRecap(): Promise<WeeklyRecapData> {
+  const { data } = await api.get<WeeklyRecapData>("/analytics/weekly-recap");
+  return data;
+}
+

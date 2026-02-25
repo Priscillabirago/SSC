@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { Loader2, RefreshCcw, Info, Sparkles, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Loader2, RefreshCcw, Info, Sparkles, X, ListTodo } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -9,17 +10,20 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { CalendarExportDialog } from "@/features/schedule/components/calendar-export";
 import { MicroPlanWidget } from "@/features/schedule/components/micro-plan-widget";
 import { QuickAddTaskWidget } from "@/features/schedule/components/quick-add-task-widget";
 import { WeeklyTimeline } from "@/features/schedule/components/weekly-timeline";
 import { WorkloadWarningsCard } from "@/features/schedule/components/workload-warnings-card";
 import { useAnalyzeSchedule, useGenerateSchedule, useSessions } from "@/features/schedule/hooks";
+import { useTasks } from "@/features/tasks/hooks";
 import { toast } from "@/components/ui/use-toast";
 import type { WorkloadAnalysis } from "@/features/schedule/api";
 import type { StudySession } from "@/lib/types";
 import { compareSchedules, getScheduleDiffSummary, type ScheduleDiff } from "@/features/schedule/utils/schedule-diff";
 
 export function ScheduleView() {
+  const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const [useAiOptimization, setUseAiOptimization] = useState(false);
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
@@ -31,8 +35,12 @@ export function ScheduleView() {
   useEffect(() => setMounted(true), []);
 
   const { data: sessions, isLoading } = useSessions();
+  const { data: tasks } = useTasks();
   const generate = useGenerateSchedule();
   const analyzeSchedule = useAnalyzeSchedule();
+
+  const hasTasks = (tasks?.filter(t => !t.is_completed && !t.is_recurring_template).length ?? 0) > 0;
+  const hasSessions = (sessions?.length ?? 0) > 0;
 
   // Clear diff after 5 minutes (for visual badges)
   useEffect(() => {
@@ -174,64 +182,75 @@ export function ScheduleView() {
           </p>
         </div>
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="ai-optimization"
-              checked={useAiOptimization}
-              onCheckedChange={(checked) => setUseAiOptimization(checked === true)}
-              disabled={generate.isPending}
-            />
-            <Label htmlFor="ai-optimization" className="text-sm font-normal cursor-pointer flex items-center gap-1.5">
-              <Sparkles className="h-3.5 w-3.5 text-purple-500" />
-              <span className="hidden sm:inline">AI optimization</span>
-              <span className="sm:hidden">AI opt.</span>
-            </Label>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent className="max-w-xs">
-                  <p className="font-semibold mb-1">AI Schedule Optimization</p>
-                  <p className="text-xs">
-                    When enabled, AI reviews your schedule and optimizes it for real-world efficiency:
-                  </p>
-                  <ul className="text-xs list-disc list-inside mt-1 space-y-0.5">
-                    <li>Balances workload across days</li>
-                    <li>Matches task difficulty to your energy levels</li>
-                    <li>Adds buffer time between sessions</li>
-                    <li>Improves pacing and variety</li>
-                  </ul>
-                  <p className="text-xs mt-2 text-muted-foreground">
-                    Takes 1-2 seconds longer but creates more realistic schedules.
-                  </p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </div>
+          {hasTasks && (
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="ai-optimization"
+                checked={useAiOptimization}
+                onCheckedChange={(checked) => setUseAiOptimization(checked === true)}
+                disabled={generate.isPending}
+              />
+              <Label htmlFor="ai-optimization" className="text-sm font-normal cursor-pointer flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5 text-purple-500" />
+                <span className="hidden sm:inline">AI optimization</span>
+                <span className="sm:hidden">AI opt.</span>
+              </Label>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    <p className="font-semibold mb-1">AI Schedule Optimization</p>
+                    <p className="text-xs">
+                      When enabled, AI reviews your schedule and optimizes it for real-world efficiency:
+                    </p>
+                    <ul className="text-xs list-disc list-inside mt-1 space-y-0.5">
+                      <li>Balances workload across days</li>
+                      <li>Matches task difficulty to your energy levels</li>
+                      <li>Adds buffer time between sessions</li>
+                      <li>Improves pacing and variety</li>
+                    </ul>
+                    <p className="text-xs mt-2 text-muted-foreground">
+                      Takes 1-2 seconds longer but creates more realistic schedules.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          )}
+          {hasSessions && <CalendarExportDialog />}
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button onClick={handleGenerate} disabled={generate.isPending} className="gap-2 w-full sm:w-auto">
+                <Button onClick={handleGenerate} disabled={generate.isPending || !hasTasks} className="gap-2 w-full sm:w-auto">
                   {generate.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                  <span className="hidden sm:inline">Regenerate week</span>
-                  <span className="sm:hidden">Regenerate</span>
+                  <span className="hidden sm:inline">{hasSessions ? "Regenerate week" : "Generate week"}</span>
+                  <span className="sm:hidden">{hasSessions ? "Regenerate" : "Generate"}</span>
                 </Button>
               </TooltipTrigger>
               <TooltipContent className="max-w-xs">
-                <p className="font-semibold mb-1">Regenerate Week</p>
-                <p className="text-xs">
-                  Creates a fresh 7-day schedule by:
-                </p>
-                <ul className="text-xs list-disc list-inside mt-1 space-y-0.5">
-                  <li>Taking all your current tasks</li>
-                  <li>Considering priorities, deadlines, and energy levels</li>
-                  <li>Respecting your constraints (classes, busy times)</li>
-                  <li>Placing sessions in your preferred study windows</li>
-                </ul>
-                <p className="text-xs mt-2 text-muted-foreground">
-                  Note: This replaces your current week's schedule. Completed sessions are preserved.
-                </p>
+                <p className="font-semibold mb-1">{hasSessions ? "Regenerate Week" : "Generate Week"}</p>
+                {hasTasks ? (
+                  <>
+                    <p className="text-xs">
+                      Creates a fresh 7-day schedule by:
+                    </p>
+                    <ul className="text-xs list-disc list-inside mt-1 space-y-0.5">
+                      <li>Taking all your current tasks</li>
+                      <li>Considering priorities, deadlines, and energy levels</li>
+                      <li>Respecting your constraints (classes, busy times)</li>
+                      <li>Placing sessions in your preferred study windows</li>
+                    </ul>
+                    {hasSessions && (
+                      <p className="text-xs mt-2 text-muted-foreground">
+                        Note: This replaces your current week's schedule. Completed sessions are preserved.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs">Add some tasks first, then generate your study plan.</p>
+                )}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -268,9 +287,32 @@ export function ScheduleView() {
         </Card>
       )}
 
-      {isLoading || !sessions ? (
+      {(isLoading || !sessions) && (
         <Skeleton className="h-64 w-full" />
-      ) : (
+      )}
+
+      {!isLoading && sessions && !hasTasks && !hasSessions && (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+            <ListTodo className="h-12 w-12 text-muted-foreground/30 mb-4" />
+            <p className="text-sm font-medium text-foreground mb-1">No tasks yet</p>
+            <p className="text-xs text-muted-foreground max-w-sm mb-5">
+              Add your subjects and tasks first. The scheduler will then create a study plan around your availability and priorities.
+            </p>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => router.push("/tasks")}
+              className="gap-2"
+            >
+              <ListTodo className="h-3.5 w-3.5" />
+              Go to Tasks
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {!isLoading && sessions && (hasTasks || hasSessions) && (
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-[1.3fr_0.7fr]">
           <WeeklyTimeline sessions={sessions} scheduleDiff={scheduleDiff} />
           <div className="space-y-6">

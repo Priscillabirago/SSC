@@ -10,7 +10,9 @@ node_modules/
 out/
 
 # Env & logs
-.env*
+.env
+.env.local
+.env.production
 *.log
 
 # Compiled
@@ -24,8 +26,6 @@ build/
 
 env/backend.env
 env/frontend.env
-.env.example
-.env.example
 /.pip
 smart_study_companion.db
 /.npm-cache

@@ -3,6 +3,13 @@
 import { useEffect, useState } from "react";
 import { Plus, X, Clock, Mail, Lock, KeyRound, Play } from "lucide-react";
 import { useDemoMode } from "@/contexts/demo-mode-context";
+import {
+  getNotificationsEnabled,
+  setNotificationsEnabled,
+  isNotificationSupported,
+  getNotificationPermission,
+  requestNotificationPermission,
+} from "@/hooks/use-session-notifications";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -511,6 +518,8 @@ export function SettingsView() {
             </form>
           </CardContent>
         </Card>
+
+        <NotificationSettings />
         
         {/* Blocked Times / Constraints */}
         <ConstraintsManager />
@@ -915,6 +924,69 @@ function AccountManagementSection({ profile }: AccountManagementSectionProps) {
         </p>
       </div>
     </div>
+  );
+}
+
+function NotificationSettings() {
+  const [enabled, setEnabled] = useState(false);
+  const [permission, setPermission] = useState<NotificationPermission | "unsupported">("unsupported");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    setEnabled(getNotificationsEnabled());
+    setPermission(getNotificationPermission());
+  }, []);
+
+  if (!mounted || !isNotificationSupported()) return null;
+
+  const handleToggle = async (checked: boolean) => {
+    if (checked) {
+      if (Notification.permission === "default") {
+        const granted = await requestNotificationPermission();
+        setPermission(granted ? "granted" : "denied");
+        if (!granted) {
+          toast({ variant: "destructive", title: "Notifications blocked", description: "You can enable them in your browser settings." });
+          return;
+        }
+      } else if (Notification.permission === "denied") {
+        toast({ variant: "destructive", title: "Notifications blocked", description: "Please enable notifications in your browser settings for this site." });
+        return;
+      }
+    }
+    setNotificationsEnabled(checked);
+    setEnabled(checked);
+    toast({
+      title: checked ? "Reminders enabled" : "Reminders disabled",
+      description: checked ? "You'll get a notification 5 minutes before each session." : "You won't receive session reminders.",
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Session Reminders</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center justify-between rounded-xl border border-border/60 bg-white/70 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-foreground">Browser notifications</p>
+            <p className="text-xs text-muted-foreground">
+              Get a reminder 5 minutes before each scheduled session.
+            </p>
+            {permission === "denied" && (
+              <p className="text-xs text-destructive mt-1">
+                Notifications are blocked. Enable them in your browser settings for this site.
+              </p>
+            )}
+          </div>
+          <Switch
+            checked={enabled}
+            onCheckedChange={handleToggle}
+          />
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

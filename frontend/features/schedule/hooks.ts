@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
 import type { StudySession, StudySessionCreate, WeeklyPlan } from "@/lib/types";
 
-import { analyzeSchedule, createSession, deleteSession, generateSchedule, getWorkloadAnalysis, listSessions, microPlan, pinSession, prepareSession, updateSession } from "./api";
+import { analyzeSchedule, createSession, deleteSession, generateCalendarToken, generateSchedule, getCalendarToken, getWorkloadAnalysis, listSessions, microPlan, pinSession, prepareSession, revokeCalendarToken, updateSession } from "./api";
 
 export function useSessions() {
   return useQuery({
@@ -96,6 +96,34 @@ export function useWorkloadAnalysis() {
 export function useAnalyzeSchedule() {
   return useMutation({
     mutationFn: (plan: WeeklyPlan) => analyzeSchedule(plan),
+  });
+}
+
+// Calendar export hooks
+
+export function useCalendarToken() {
+  return useQuery({
+    queryKey: ["schedule", "calendar-token"],
+    queryFn: getCalendarToken,
+    staleTime: Infinity,
+  });
+}
+
+export function useGenerateCalendarToken() {
+  return useMutation({
+    mutationFn: generateCalendarToken,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["schedule", "calendar-token"] });
+    },
+  });
+}
+
+export function useRevokeCalendarToken() {
+  return useMutation({
+    mutationFn: revokeCalendarToken,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["schedule", "calendar-token"] });
+    },
   });
 }
 

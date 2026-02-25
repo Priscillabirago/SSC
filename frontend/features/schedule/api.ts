@@ -113,3 +113,29 @@ export async function deleteSession(sessionId: number): Promise<void> {
   await api.delete(`/schedule/sessions/${sessionId}`);
 }
 
+// Calendar export
+
+export async function getCalendarToken(): Promise<{ calendar_token: string | null }> {
+  const { data } = await api.get<{ calendar_token: string | null }>("/schedule/calendar/token");
+  return data;
+}
+
+export async function generateCalendarToken(): Promise<{ calendar_token: string }> {
+  const { data } = await api.post<{ calendar_token: string }>("/schedule/calendar/token");
+  return data;
+}
+
+export async function revokeCalendarToken(): Promise<void> {
+  await api.delete("/schedule/calendar/token");
+}
+
+export function getCalendarDownloadUrl(): string {
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  return `${baseURL}/schedule/calendar/download`;
+}
+
+export function getCalendarFeedUrl(token: string): string {
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  return `${baseURL}/schedule/calendar/feed?token=${token}`;
+}
+

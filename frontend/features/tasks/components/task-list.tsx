@@ -32,6 +32,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -44,6 +55,7 @@ import { useDeleteTask, useGenerateSubtasks, useUpdateTask } from "@/features/ta
 import { useSessions } from "@/features/schedule/hooks";
 import { toast } from "@/components/ui/use-toast";
 import { ManageSeriesDialog } from "./manage-series-dialog";
+import { TaskSessionHistory } from "./task-session-history";
 import { useFocusSession } from "@/contexts/focus-session-context";
 import { useQuickTrack } from "@/contexts/quick-track-context";
 import { StartTrackingButton } from "@/components/tracking/start-tracking-button";
@@ -251,6 +263,62 @@ const SortableSubtaskItem = ({
   );
 };
 
+function _saveCursorPosition(element: HTMLElement, selection: Selection | null): number {
+  if (!selection || selection.rangeCount <= 0) return 0;
+  const range = selection.getRangeAt(0);
+  const preCaretRange = range.cloneRange();
+  preCaretRange.selectNodeContents(element);
+  preCaretRange.setEnd(range.endContainer, range.endOffset);
+  return preCaretRange.toString().length;
+}
+
+function _restoreCursorPosition(element: HTMLElement, selection: Selection | null, cursorPos: number): void {
+  if (!selection || cursorPos <= 0) return;
+  try {
+    const range = document.createRange();
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let charCount = 0;
+    let targetNode: Node | null = null;
+
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const nodeLength = node.textContent?.length || 0;
+      if (charCount + nodeLength >= cursorPos) {
+        targetNode = node;
+        break;
+      }
+      charCount += nodeLength;
+    }
+
+    if (targetNode) {
+      range.setStart(targetNode, Math.min(cursorPos - charCount, targetNode.textContent?.length || 0));
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  } catch (error: unknown) {
+    console.warn('Failed to restore cursor position:', error);
+    element.focus();
+  }
+}
+
+const _LINK_ATTRS = 'target="_blank" rel="noopener noreferrer" class="text-primary hover:underline cursor-pointer" style="pointer-events: auto;" contenteditable="false"';
+
+function _linkifyUrl(html: string, url: string): string {
+  const escapedUrl = url.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  const urlInLinkRegex = new RegExp(String.raw`<a[^>]*>.*?${escapedUrl}.*?</a>`, 'gi');
+  if (urlInLinkRegex.test(html)) return html;
+
+  const replaceRegex = new RegExp(String.raw`(^|[^"']|>|\s)(${escapedUrl})([^<]*?)(<|$|\s)`, 'g');
+  return html.replace(replaceRegex, (match, before, urlMatch, after, end) => {
+    const beforeMatch = html.substring(0, html.indexOf(match));
+    const lastOpenTag = beforeMatch.lastIndexOf('<');
+    const lastCloseTag = beforeMatch.lastIndexOf('>');
+    if (lastOpenTag > lastCloseTag) return match;
+    return `${before}<a href="${urlMatch}" ${_LINK_ATTRS}>${urlMatch}</a>${after}${end}`;
+  });
+}
+
 export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProps) {
   const router = useRouter();
   const updateTask = useUpdateTask();
@@ -269,6 +337,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
   const [editingDeadlineId, setEditingDeadlineId] = useState<number | null>(null);
   const [quickDeadlineValue, setQuickDeadlineValue] = useState<string>("");
+  const [expandedSessions, setExpandedSessions] = useState<Set<number>>(new Set());
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
   const [editingNotes, setEditingNotes] = useState<Map<number, string>>(new Map());
   const [savingNotes, setSavingNotes] = useState<Set<number>>(new Set());
@@ -1701,7 +1770,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
                   title="Click to change deadline"
                 >
                   {(() => {
-                    const deadlineDate = parseBackendDateTime(task.deadline!);
+                    const deadlineDate = parseBackendDateTime(task.deadline);
                     const now = new Date();
                     const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
                     const deadlineDateOnlyUTC = new Date(Date.UTC(deadlineDate.getUTCFullYear(), deadlineDate.getUTCMonth(), deadlineDate.getUTCDate()));
@@ -1946,88 +2015,28 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     }
   };
 
-  // Helper: Convert URLs in text to clickable links
   const convertUrlsToLinks = (element: HTMLElement) => {
-    // Get all text content
     const text = element.innerText || element.textContent || "";
-    const urlRegex = /(https?:\/\/[^\s<>"]+)/g;
-    const urls = text.match(urlRegex);
-    
+    const urls = text.match(/(https?:\/\/[^\s<>"]+)/g);
+
     if (!urls || urls.length === 0) return;
-    
-    // Get existing links
+
     const existingLinks = new Set(Array.from(element.querySelectorAll('a')).map(a => a.getAttribute('href')));
     const newUrls = urls.filter(url => !existingLinks.has(url));
-    
+
     if (newUrls.length === 0) return;
-    
-    // Save cursor position
+
     const selection = globalThis.getSelection();
-    let cursorPos = 0;
-    if (selection && selection.rangeCount > 0) {
-      const range = selection.getRangeAt(0);
-      const preCaretRange = range.cloneRange();
-      preCaretRange.selectNodeContents(element);
-      preCaretRange.setEnd(range.endContainer, range.endOffset);
-      cursorPos = preCaretRange.toString().length;
-    }
-    
-    // Simple approach: get innerHTML, replace URLs that aren't already in links
+    const cursorPos = _saveCursorPosition(element, selection);
+
     let html = element.innerHTML;
-    newUrls.forEach(url => {
-      // Only replace if URL is not already inside an <a> tag
-      const escapedUrl = url.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
-      const urlInLinkRegex = new RegExp(String.raw`<a[^>]*>.*?${escapedUrl}.*?</a>`, 'gi');
-      if (!urlInLinkRegex.test(html)) {
-        // Replace URL with link, but preserve surrounding text
-        const replaceRegex = new RegExp(String.raw`(^|[^"']|>|\s)(${escapedUrl})([^<]*?)(<|$|\s)`, 'g');
-        html = html.replace(replaceRegex, (match, before, urlMatch, after, end) => {
-          // Check if we're inside an existing tag
-          const beforeMatch = html.substring(0, html.indexOf(match));
-          const lastOpenTag = beforeMatch.lastIndexOf('<');
-          const lastCloseTag = beforeMatch.lastIndexOf('>');
-          if (lastOpenTag > lastCloseTag) {
-            // Inside a tag, don't replace
-            return match;
-          }
-          return `${before}<a href="${urlMatch}" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline cursor-pointer" style="pointer-events: auto;" contenteditable="false">${urlMatch}</a>${after}${end}`;
-        });
-      }
-    });
-    
+    for (const url of newUrls) {
+      html = _linkifyUrl(html, url);
+    }
+
     if (html !== element.innerHTML) {
       element.innerHTML = html;
-      
-      // Restore cursor position
-      if (selection && cursorPos > 0) {
-        try {
-          const range = document.createRange();
-          const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-          let charCount = 0;
-          let targetNode: Node | null = null;
-          
-          while (walker.nextNode()) {
-            const node = walker.currentNode;
-            const nodeLength = node.textContent?.length || 0;
-            if (charCount + nodeLength >= cursorPos) {
-              targetNode = node;
-              break;
-            }
-            charCount += nodeLength;
-          }
-          
-          if (targetNode) {
-            range.setStart(targetNode, Math.min(cursorPos - charCount, targetNode.textContent?.length || 0));
-            range.collapse(true);
-            selection.removeAllRanges();
-            selection.addRange(range);
-          }
-        } catch (error: unknown) {
-          // If restoration fails, just focus
-          console.warn('Failed to restore cursor position:', error);
-          element.focus();
-        }
-      }
+      _restoreCursorPosition(element, selection, cursorPos);
     }
   };
 
@@ -2870,17 +2879,38 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
                         Edit Task
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onClick={() =>
-                          deleteTask.mutate(task.id, {
-                            onSuccess: () => toast({ title: "Task removed" })
-                          })
-                        }
-                        className="text-destructive focus:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4 mr-2" />
-                        Delete Task
-                      </DropdownMenuItem>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <DropdownMenuItem
+                            onSelect={(e) => e.preventDefault()}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete Task
+                          </DropdownMenuItem>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete "{task.title}"?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This will permanently remove this task, its notes, subtasks, and session history. This action cannot be undone.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              onClick={() =>
+                                deleteTask.mutate(task.id, {
+                                  onSuccess: () => toast({ title: "Task deleted" }),
+                                })
+                              }
+                            >
+                              Delete
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
@@ -2936,6 +2966,31 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
                       />
                     )}
                     {renderSubtasksSection(task)}
+                    {getSessionCount(task.id) > 0 && (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={() => {
+                                setExpandedSessions((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(task.id)) next.delete(task.id);
+                                  else next.add(task.id);
+                                  return next;
+                                });
+                              }}
+                              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                            >
+                              {expandedSessions.has(task.id) ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                              <span>{getSessionCount(task.id)} session{getSessionCount(task.id) === 1 ? "" : "s"}</span>
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>{expandedSessions.has(task.id) ? "Hide session history" : "View session history"}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    )}
                   </div>
                 </div>
                 
@@ -2943,6 +2998,17 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
                 {expandedSubtasks.has(task.id) && (task.subtasks && task.subtasks.length > 0 || editingSubtask?.taskId === task.id) && (
                   <div className="mt-3 pt-3 border-t border-border/30">
                     {renderExpandedSubtasks(task, editingSubtask?.taskId === task.id)}
+                  </div>
+                )}
+
+                {/* Expanded session history */}
+                {expandedSessions.has(task.id) && (
+                  <div className="mt-3 pt-3 border-t border-border/30">
+                    <TaskSessionHistory
+                      taskId={task.id}
+                      estimatedMinutes={task.estimated_minutes}
+                      totalMinutesSpent={task.total_minutes_spent ?? 0}
+                    />
                   </div>
                 )}
               </>
@@ -3131,7 +3197,18 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
                 <div className="text-center py-8">
                   <ListTodo className="h-12 w-12 text-muted-foreground/50 mx-auto mb-3" />
                   <p className="text-sm font-medium text-foreground mb-1">No pending tasks</p>
-                  <p className="text-xs text-muted-foreground mb-4">Create your first task to get started!</p>
+                  <p className="text-xs text-muted-foreground mb-3 max-w-xs mx-auto">
+                    {subjects.length === 0
+                      ? "Start by adding a subject (e.g. \"Math\"), then create tasks under it."
+                      : "Use the \"New Task\" button above to create your first task."}
+                  </p>
+                  {subjects.length > 0 && (
+                    <div className="inline-block text-left bg-muted/40 rounded-lg px-4 py-3 max-w-xs">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5">Example task</p>
+                      <p className="text-xs font-medium text-foreground">Chapter 5 Review</p>
+                      <p className="text-[11px] text-muted-foreground">2 hours · Due Friday · High priority</p>
+                    </div>
+                  )}
                 </div>
               )}
             </p>

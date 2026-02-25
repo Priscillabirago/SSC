@@ -23,6 +23,7 @@ class User(Base):
     max_session_length = Column(Integer, nullable=False, default=120)
     break_duration = Column(Integer, nullable=False, default=15)
     energy_tagging_enabled = Column(Boolean, nullable=False, default=True)
+    calendar_token = Column(String(64), nullable=True, unique=True, index=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(
         DateTime,

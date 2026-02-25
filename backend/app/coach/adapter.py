@@ -59,6 +59,12 @@ class CoachAdapter(ABC):
     ) -> dict[str, Any]:
         """Generate encouraging, motivational messages during a focus session."""
 
+    @abstractmethod
+    def generate_weekly_recap(
+        self, user: User, weekly_context: dict[str, Any], context: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Generate a personalized weekly recap with specific, actionable feedback."""
+
 
 class MemoryStore(Protocol):
     def add(self, *, user_id: int, topic: str, content: str, source: str) -> None:

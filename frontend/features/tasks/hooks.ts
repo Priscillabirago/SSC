@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
 import type { Task } from "@/lib/types";
 
-import { createTask, deleteTask, generateSubtasks, listTasks, updateTask } from "./api";
+import { createTask, deleteTask, generateSubtasks, listTaskSessions, listTasks, updateTask } from "./api";
 
 export function useTasks() {
   return useQuery({
@@ -58,6 +58,15 @@ export function useDeleteTask() {
 export function useGenerateSubtasks() {
   return useMutation({
     mutationFn: (taskId: number) => generateSubtasks(taskId)
+  });
+}
+
+export function useTaskSessions(taskId: number | null) {
+  return useQuery({
+    queryKey: ["tasks", taskId, "sessions"],
+    queryFn: () => listTaskSessions(taskId!),
+    enabled: taskId !== null,
+    staleTime: 60000,
   });
 }
 

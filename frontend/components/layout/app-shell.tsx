@@ -10,11 +10,14 @@ import { getAccessToken } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FocusSessionView } from "@/features/schedule/components/focus-session-view";
+import { useSessionNotifications } from "@/hooks/use-session-notifications";
 
 export function AppShell({ children }: { readonly children: React.ReactNode }) {
   const router = useRouter();
   const { data: profile, isLoading } = useProfile();
   const [mounted, setMounted] = useState(false);
+
+  useSessionNotifications();
 
   useEffect(() => {
     setMounted(true);

@@ -689,3 +689,174 @@ Return JSON format:
 
         return {"message": "Stay focused! You're making progress.", "tone": "supportive"}
 
+    def generate_weekly_recap(
+        self, user: User, weekly_context: dict[str, Any], context: dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate a personalized weekly recap with specific, actionable feedback."""
+        return _generate_weekly_recap_impl(self, user, weekly_context, context)
+
+
+def _format_adherence_trend(adherence: float, prev_adherence: float) -> str:
+    if prev_adherence <= 0:
+        return ""
+    diff = adherence - prev_adherence
+    if diff > 5:
+        return f"Adherence improved by {diff:.0f}% compared to the previous week."
+    if diff < -5:
+        return f"Adherence dropped by {abs(diff):.0f}% compared to the previous week."
+    return "Adherence was roughly the same as last week."
+
+
+def _generate_weekly_recap_impl(
+    adapter, user: User, weekly_context: dict[str, Any], context: dict[str, Any]
+) -> Dict[str, Any]:
+    """Shared weekly recap logic for both adapters."""
+    total_sessions = weekly_context.get("total_sessions", 0)
+    completed = weekly_context.get("completed_sessions", 0)
+    skipped = weekly_context.get("skipped_sessions", 0)
+    partial = weekly_context.get("partial_sessions", 0)
+    total_hours = weekly_context.get("total_hours", 0)
+    target_hours = weekly_context.get("target_hours", 10)
+    adherence = weekly_context.get("adherence_rate", 0)
+    prev_adherence = weekly_context.get("prev_adherence_rate", 0)
+    best_day = weekly_context.get("best_day", "")
+    worst_day = weekly_context.get("worst_day", "")
+    best_time_of_day = weekly_context.get("best_time_of_day", "")
+    subjects_breakdown = weekly_context.get("subjects_breakdown", {})
+    tasks_completed = weekly_context.get("tasks_completed", 0)
+    tasks_overdue = weekly_context.get("tasks_overdue", 0)
+    streak = weekly_context.get("streak", 0)
+    day_details = weekly_context.get("day_details", {})
+    skipped_sessions_detail = weekly_context.get("skipped_sessions_detail", [])
+
+    subjects_str = ", ".join(
+        f"{name}: {mins // 60}h {mins % 60}m" for name, mins in subjects_breakdown.items()
+    ) if subjects_breakdown else "No subject data"
+
+    day_detail_str = "\n".join(
+        f"  {day}: {info.get('completed', 0)} completed, {info.get('skipped', 0)} skipped, {info.get('minutes', 0)} min"
+        for day, info in day_details.items()
+    ) if day_details else "No daily data"
+
+    skipped_str = ""
+    if skipped_sessions_detail:
+        skipped_str = "Skipped sessions:\n" + "\n".join(
+            f"  - {s.get('focus', 'Unknown')} on {s.get('day', '?')} at {s.get('time', '?')}"
+            for s in skipped_sessions_detail[:5]
+        )
+
+    adherence_trend = _format_adherence_trend(adherence, prev_adherence)
+
+    prompt = f"""Generate a personalized weekly study recap for this student. Be VERY specific — reference actual days, subjects, numbers, and patterns. No generic advice.
+
+WEEKLY DATA:
+- Sessions: {completed} completed, {partial} partial, {skipped} skipped out of {total_sessions} total
+- Study time: {total_hours:.1f} hours (target: {target_hours} hours)
+- Adherence: {adherence:.0f}%. {adherence_trend}
+- Current streak: {streak} day(s)
+- Tasks completed this week: {tasks_completed}
+- Overdue tasks: {tasks_overdue}
+- Best day: {best_day}
+- Weakest day: {worst_day}
+- Most productive time: {best_time_of_day}
+- Subjects studied: {subjects_str}
+
+DAY-BY-DAY:
+{day_detail_str}
+
+{skipped_str}
+
+RULES:
+1. "recap" — 3-4 sentences summarizing the week. Reference specific days, subjects, and numbers. Mention what went well AND what didn't.
+2. "highlight" — The single best thing they did this week (be specific: "You nailed your Wednesday math sessions" not "Great job").
+3. "concern" — The biggest issue to address (be honest: "You skipped every Friday session" not "Consider being more consistent"). Null if nothing concerning.
+4. "actions" — Array of 2-3 SPECIFIC actions for next week. Not "study more" but "Schedule your {worst_day} sessions 30 minutes later — you skipped all 3 this week, possibly because they were too early."
+5. "tone" — "celebratory" if adherence > 80%, "encouraging" if 50-80%, "honest" if < 50%
+
+Return JSON:
+{{
+  "recap": "string",
+  "highlight": "string",
+  "concern": "string or null",
+  "actions": ["string", "string"],
+  "tone": "celebratory|encouraging|honest"
+}}"""
+
+    fallback = _weekly_recap_fallback(weekly_context)
+
+    if hasattr(adapter, "client") and adapter.client:
+        try:
+            messages = adapter._build_messages(user, prompt, context)
+            completion = adapter.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0.6,
+                response_format={"type": "json_object"},
+            )
+            reply = completion.choices[0].message.content
+            import json
+            parsed = json.loads(reply)
+            return {
+                "recap": parsed.get("recap", fallback["recap"]),
+                "highlight": parsed.get("highlight", fallback["highlight"]),
+                "concern": parsed.get("concern"),
+                "actions": parsed.get("actions", fallback["actions"]),
+                "tone": parsed.get("tone", fallback["tone"]),
+            }
+        except Exception:
+            return fallback
+    elif hasattr(adapter, "model") and adapter.model:
+        try:
+            import json as json_mod
+            system_msg = adapter._build_system_prompt(user, context)
+            result = adapter.model.generate_content(
+                [system_msg, prompt],
+                generation_config={"temperature": 0.6, "response_mime_type": "application/json"},
+            )
+            parsed = json_mod.loads(result.text)
+            return {
+                "recap": parsed.get("recap", fallback["recap"]),
+                "highlight": parsed.get("highlight", fallback["highlight"]),
+                "concern": parsed.get("concern"),
+                "actions": parsed.get("actions", fallback["actions"]),
+                "tone": parsed.get("tone", fallback["tone"]),
+            }
+        except Exception:
+            return fallback
+
+    return fallback
+
+
+def _weekly_recap_fallback(ctx: dict) -> dict:
+    completed = ctx.get("completed_sessions", 0)
+    total = ctx.get("total_sessions", 0)
+    hours = ctx.get("total_hours", 0)
+    target = ctx.get("target_hours", 10)
+    best_day = ctx.get("best_day", "mid-week")
+
+    recap = f"You completed {completed} of {total} sessions this week, studying {hours:.1f} hours out of your {target}-hour target."
+    if completed > 0:
+        recap += f" Your most productive day was {best_day}."
+    suffix = "s" if completed != 1 else ""
+    if completed > 0:
+        highlight = f"You showed up for {completed} session{suffix} this week."
+    else:
+        highlight = "You have a fresh start ahead — set up your schedule and commit to one session tomorrow."
+
+    actions = []
+    if ctx.get("skipped_sessions", 0) > 2:
+        actions.append(f"Review why you skipped {ctx['skipped_sessions']} sessions — were they at bad times?")
+    if hours < target * 0.5:
+        actions.append("Try shorter sessions (25-30 min) to build consistency before increasing duration.")
+    if not actions:
+        actions.append("Keep your current momentum going — consistency beats intensity.")
+
+    tone = "encouraging" if completed >= total * 0.5 else "honest"
+    return {
+        "recap": recap,
+        "highlight": highlight,
+        "concern": None,
+        "actions": actions,
+        "tone": tone,
+    }
+

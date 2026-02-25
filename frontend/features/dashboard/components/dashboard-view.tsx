@@ -12,6 +12,7 @@ import { TodayPlanCard } from "@/features/dashboard/components/upcoming-tasks-ca
 import { AIInsightsCard } from "@/features/dashboard/components/ai-insights-card";
 import { GettingStartedGuide } from "@/features/dashboard/components/getting-started-guide";
 import { DailySummaryCard } from "@/features/dashboard/components/daily-summary-card";
+import { WeeklyRecapCard } from "@/features/dashboard/components/weekly-recap-card";
 import { useAnalyticsOverview } from "@/features/dashboard/hooks";
 import { useSessions, useGenerateSchedule } from "@/features/schedule/hooks";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -69,7 +70,7 @@ export function DashboardView() {
           <div className="min-w-0">
             <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Dashboard</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Your personalized study companion. Follow the steps below to get started.
+              Your study hub. Follow the steps below to set things up — it only takes a few minutes.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -100,9 +101,9 @@ export function DashboardView() {
         {/* Welcome Message */}
         <div className="text-center py-8">
           <Sparkles className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
-          <p className="text-base font-medium text-foreground mb-1">Welcome to your dashboard!</p>
+          <p className="text-base font-medium text-foreground mb-1">Your progress will show up here</p>
           <p className="text-sm text-muted-foreground max-w-md mx-auto">
-            Complete the steps above to set up your study companion. Your progress and insights will appear here once you start.
+            Once you add tasks and generate a schedule, this page will show your daily plan, study streaks, and AI-powered insights.
           </p>
         </div>
       </div>
@@ -116,6 +117,9 @@ export function DashboardView() {
       
       {/* Daily Summary - Show in the morning */}
       <DailySummaryCard />
+
+      {/* Weekly Recap - AI-generated summary of last week */}
+      <WeeklyRecapCard />
       
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="min-w-0">

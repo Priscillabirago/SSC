@@ -643,3 +643,10 @@ Return JSON format:
 
         return {"message": "Stay focused! You're making progress.", "tone": "supportive"}
 
+    def generate_weekly_recap(
+        self, user: User, weekly_context: dict[str, Any], context: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Generate a personalized weekly recap with specific, actionable feedback."""
+        from app.coach.openai_adapter import _generate_weekly_recap_impl
+        return _generate_weekly_recap_impl(self, user, weekly_context, context)
+

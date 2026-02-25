@@ -832,3 +832,296 @@ def get_detailed_analytics(
         time_distribution=dict(time_distribution),
     )
 
+
+# ---------------------------------------------------------------------------
+# Weekly Recap
+# ---------------------------------------------------------------------------
+
+def _get_week_boundaries(user_tz_str: str) -> tuple[datetime, datetime, datetime, datetime]:
+    """Get current and previous week boundaries in UTC (naive)."""
+    try:
+        user_tz = ZoneInfo(user_tz_str)
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+
+    now_local = datetime.now(user_tz)
+    # Start of this week (Monday 00:00)
+    days_since_monday = now_local.weekday()
+    this_monday = (now_local - timedelta(days=days_since_monday)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    last_monday = this_monday - timedelta(weeks=1)
+    last_sunday = this_monday
+
+    # Convert to naive UTC
+    this_monday_utc = this_monday.astimezone(timezone.utc).replace(tzinfo=None)
+    last_monday_utc = last_monday.astimezone(timezone.utc).replace(tzinfo=None)
+    last_sunday_utc = last_sunday.astimezone(timezone.utc).replace(tzinfo=None)
+    # Previous week for comparison
+    prev_monday_utc = (last_monday - timedelta(weeks=1)).astimezone(timezone.utc).replace(tzinfo=None)
+
+    return last_monday_utc, last_sunday_utc, prev_monday_utc, this_monday_utc
+
+
+def _session_duration_minutes(s: StudySession) -> int:
+    return int((s.end_time - s.start_time).total_seconds() // 60)
+
+
+def _classify_time_of_day(hour: int) -> str:
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 17:
+        return "afternoon"
+    if 17 <= hour < 21:
+        return "evening"
+    return "night"
+
+
+_ACTIVE_STATUSES = (SessionStatus.COMPLETED, SessionStatus.PARTIAL)
+
+
+def _compute_session_counts(
+    sessions: list[StudySession],
+) -> tuple[int, int, int, int, int]:
+    total = len(sessions)
+    completed = len([s for s in sessions if s.status == SessionStatus.COMPLETED])
+    skipped = len([s for s in sessions if s.status == SessionStatus.SKIPPED])
+    partial = len([s for s in sessions if s.status == SessionStatus.PARTIAL])
+    total_minutes = sum(
+        _session_duration_minutes(s)
+        for s in sessions
+        if s.status in _ACTIVE_STATUSES
+    )
+    return total, completed, skipped, partial, total_minutes
+
+
+def _compute_adherence(
+    total: int,
+    completed: int,
+    prev_sessions: list[StudySession],
+) -> tuple[float, float]:
+    adherence = (completed / total * 100) if total > 0 else 0
+    prev_non_skipped = [s for s in prev_sessions if s.status != SessionStatus.SKIPPED]
+    prev_completed = len([s for s in prev_sessions if s.status == SessionStatus.COMPLETED])
+    prev_adherence = (prev_completed / len(prev_non_skipped) * 100) if prev_non_skipped else 0
+    return adherence, prev_adherence
+
+
+def _session_subject_name(s: StudySession) -> str:
+    if s.subject:
+        return s.subject.name
+    if s.task:
+        return s.task.title
+    return "Other"
+
+
+def _compute_subject_minutes(sessions: list[StudySession]) -> dict[str, int]:
+    subject_minutes: dict[str, int] = defaultdict(int)
+    for s in sessions:
+        if s.status not in _ACTIVE_STATUSES:
+            continue
+        subject_minutes[_session_subject_name(s)] += _session_duration_minutes(s)
+    return dict(subject_minutes)
+
+
+def _find_worst_day(day_details: dict[str, dict]) -> str:
+    if not day_details:
+        return ""
+    days_with_skips = {
+        d: info["skipped"] for d, info in day_details.items() if info["skipped"] > 0
+    }
+    if not days_with_skips:
+        return ""
+    return max(days_with_skips, key=days_with_skips.get)
+
+
+def _compute_day_breakdown(
+    sessions: list[StudySession], user_tz: ZoneInfo,
+) -> tuple[dict[str, dict], str, str]:
+    day_details: dict[str, dict] = {}
+    day_totals: dict[str, int] = defaultdict(int)
+    for s in sessions:
+        local_start = s.start_time.replace(tzinfo=timezone.utc).astimezone(user_tz)
+        day_name = local_start.strftime("%A")
+        if day_name not in day_details:
+            day_details[day_name] = {"completed": 0, "skipped": 0, "minutes": 0}
+        if s.status == SessionStatus.COMPLETED:
+            day_details[day_name]["completed"] += 1
+            mins = _session_duration_minutes(s)
+            day_details[day_name]["minutes"] += mins
+            day_totals[day_name] += mins
+        elif s.status == SessionStatus.SKIPPED:
+            day_details[day_name]["skipped"] += 1
+
+    best_day = max(day_totals, key=day_totals.get, default="") if day_totals else ""
+    worst_day = _find_worst_day(day_details)
+    return day_details, best_day, worst_day
+
+
+def _compute_best_time_of_day(
+    sessions: list[StudySession], user_tz: ZoneInfo,
+) -> str:
+    time_of_day_minutes: dict[str, int] = defaultdict(int)
+    for s in sessions:
+        if s.status not in _ACTIVE_STATUSES:
+            continue
+        local_start = s.start_time.replace(tzinfo=timezone.utc).astimezone(user_tz)
+        period = _classify_time_of_day(local_start.hour)
+        time_of_day_minutes[period] += _session_duration_minutes(s)
+    if not time_of_day_minutes:
+        return ""
+    return max(time_of_day_minutes, key=time_of_day_minutes.get)
+
+
+def _collect_skipped_details(
+    sessions: list[StudySession], user_tz: ZoneInfo,
+) -> list[dict]:
+    details = []
+    for s in sessions:
+        if s.status != SessionStatus.SKIPPED:
+            continue
+        local_start = s.start_time.replace(tzinfo=timezone.utc).astimezone(user_tz)
+        details.append({
+            "focus": _session_focus(s) or "Study session",
+            "day": local_start.strftime("%A"),
+            "time": local_start.strftime("%I:%M %p"),
+        })
+    return details
+
+
+def _compute_task_stats(
+    db: Session, user_id: int, last_mon: datetime, last_sun: datetime,
+) -> tuple[int, int]:
+    tasks = db.query(Task).filter(Task.user_id == user_id).all()
+    now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    completed = sum(
+        1 for t in tasks
+        if t.is_completed and t.completed_at
+        and last_mon <= t.completed_at < last_sun
+    )
+    overdue = sum(
+        1 for t in tasks
+        if not t.is_completed and t.deadline and t.deadline < now_utc_naive
+    )
+    return completed, overdue
+
+
+def _build_weekly_recap_context(
+    db: Session, current_user: User
+) -> dict:
+    """Gather all data needed for the weekly recap AI prompt."""
+    from sqlalchemy.orm import joinedload
+
+    last_mon, last_sun, prev_mon, _ = _get_week_boundaries(current_user.timezone)
+
+    try:
+        user_tz = ZoneInfo(current_user.timezone)
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+
+    sessions = (
+        db.query(StudySession)
+        .options(joinedload(StudySession.task), joinedload(StudySession.subject))
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.start_time >= last_mon,
+            StudySession.start_time < last_sun,
+        )
+        .order_by(StudySession.start_time.asc())
+        .all()
+    )
+
+    prev_sessions = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.start_time >= prev_mon,
+            StudySession.start_time < last_mon,
+        )
+        .all()
+    )
+
+    total, completed, skipped, partial, total_minutes = _compute_session_counts(sessions)
+    adherence, prev_adherence = _compute_adherence(total, completed, prev_sessions)
+    day_details, best_day, worst_day = _compute_day_breakdown(sessions, user_tz)
+    best_time = _compute_best_time_of_day(sessions, user_tz)
+    tasks_completed, tasks_overdue = _compute_task_stats(db, current_user.id, last_mon, last_sun)
+
+    thirty_days_ago = last_mon - timedelta(days=30)
+    streak_sessions = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.start_time >= thirty_days_ago,
+        )
+        .all()
+    )
+
+    return {
+        "total_sessions": total,
+        "completed_sessions": completed,
+        "skipped_sessions": skipped,
+        "partial_sessions": partial,
+        "total_hours": total_minutes / 60,
+        "target_hours": current_user.weekly_study_hours,
+        "adherence_rate": adherence,
+        "prev_adherence_rate": prev_adherence,
+        "best_day": best_day,
+        "worst_day": worst_day,
+        "best_time_of_day": best_time,
+        "subjects_breakdown": _compute_subject_minutes(sessions),
+        "tasks_completed": tasks_completed,
+        "tasks_overdue": tasks_overdue,
+        "streak": _calculate_streak(streak_sessions, current_user.timezone),
+        "day_details": day_details,
+        "skipped_sessions_detail": _collect_skipped_details(sessions, user_tz),
+        "week_start": last_mon.isoformat(),
+        "week_end": last_sun.isoformat(),
+    }
+
+
+@router.get("/weekly-recap")
+def get_weekly_recap(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict:
+    """Generate AI-powered weekly recap for the previous week."""
+    weekly_context = _build_weekly_recap_context(db, current_user)
+
+    # If no sessions at all last week, return a simple message
+    if weekly_context["total_sessions"] == 0:
+        return {
+            "has_data": False,
+            "recap": None,
+            "week_start": weekly_context["week_start"],
+            "week_end": weekly_context["week_end"],
+        }
+
+    try:
+        adapter = get_coach_adapter()
+        user_context = coach_service.build_coach_context(db, current_user)
+        ai_recap = adapter.generate_weekly_recap(current_user, weekly_context, user_context)
+    except Exception:
+        from app.coach.openai_adapter import _weekly_recap_fallback
+        ai_recap = _weekly_recap_fallback(weekly_context)
+
+    return {
+        "has_data": True,
+        "recap": ai_recap.get("recap", ""),
+        "highlight": ai_recap.get("highlight", ""),
+        "concern": ai_recap.get("concern"),
+        "actions": ai_recap.get("actions", []),
+        "tone": ai_recap.get("tone", "encouraging"),
+        "stats": {
+            "sessions_completed": weekly_context["completed_sessions"],
+            "sessions_total": weekly_context["total_sessions"],
+            "hours_studied": round(weekly_context["total_hours"], 1),
+            "hours_target": weekly_context["target_hours"],
+            "adherence": round(weekly_context["adherence_rate"]),
+            "tasks_completed": weekly_context["tasks_completed"],
+            "streak": weekly_context["streak"],
+        },
+        "week_start": weekly_context["week_start"],
+        "week_end": weekly_context["week_end"],
+    }
+

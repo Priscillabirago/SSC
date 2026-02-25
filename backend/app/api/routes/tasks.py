@@ -551,6 +551,48 @@ Do not include any other text, just the JSON array."""
         return _generate_fallback_subtasks(task, task_id)
 
 
+@router.get("/{task_id}/sessions")
+def list_task_sessions(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> list[dict]:
+    """Return all sessions linked to a specific task (newest first)."""
+    from sqlalchemy.orm import joinedload
+    from app.models.study_session import StudySession, SessionStatus
+    from datetime import timezone
+
+    _get_task_or_404(db, task_id, current_user)
+
+    sessions = (
+        db.query(StudySession)
+        .options(joinedload(StudySession.subject))
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.task_id == task_id,
+        )
+        .order_by(StudySession.start_time.desc())
+        .all()
+    )
+
+    result = []
+    for s in sessions:
+        start = s.start_time.replace(tzinfo=timezone.utc) if s.start_time.tzinfo is None else s.start_time
+        end = s.end_time.replace(tzinfo=timezone.utc) if s.end_time.tzinfo is None else s.end_time
+        duration_minutes = int((end - start).total_seconds() // 60)
+        result.append({
+            "id": s.id,
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+            "duration_minutes": duration_minutes,
+            "status": s.status.value,
+            "energy_level": s.energy_level,
+            "subject_name": s.subject.name if s.subject else None,
+        })
+
+    return result
+
+
 @router.post("/{task_id}/generate-instances", response_model=list[TaskPublic])
 def generate_recurring_instances(
     task_id: int,
