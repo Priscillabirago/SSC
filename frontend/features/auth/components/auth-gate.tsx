@@ -11,7 +11,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const token = getAccessToken();
-    const isPublicRoute = pathname?.startsWith("/login") || pathname?.startsWith("/register")
+    const isPublicRoute = pathname === "/" || pathname?.startsWith("/login") || pathname?.startsWith("/register")
       || pathname?.startsWith("/forgot-password") || pathname?.startsWith("/reset-password")
       || pathname?.startsWith("/share");
     const isAuthOnlyRoute = pathname?.startsWith("/login") || pathname?.startsWith("/register")

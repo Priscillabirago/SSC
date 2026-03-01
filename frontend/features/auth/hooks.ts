@@ -67,11 +67,12 @@ export function useRegister() {
     onSuccess: (tokens) => {
       storeTokens(tokens);
       queryClient.invalidateQueries({ queryKey: ["profile"] });
+      const startDemo = globalThis.window !== undefined && new URLSearchParams(globalThis.window.location.search).get("startDemo") === "1";
       toast({
         title: "Welcome!",
-        description: "Tell us about your study habits in settings."
+        description: startDemo ? "Starting your guided tour…" : "Tell us about your study habits in settings."
       });
-      router.push("/dashboard");
+      router.push(startDemo ? "/dashboard?startDemo=1" : "/dashboard");
     },
     onError: (error) => {
       toast({

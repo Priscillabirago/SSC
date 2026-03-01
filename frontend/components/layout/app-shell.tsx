@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import { StartingUpPage } from "@/components/starting-up-page";
+import { StartDemoFromUrl } from "@/components/start-demo-from-url";
 import { useProfile } from "@/features/profile/hooks";
 import { getAccessToken } from "@/lib/auth";
 import { isRetryableConnectionError } from "@/lib/error-utils";
@@ -50,6 +51,9 @@ export function AppShell({ children }: { readonly children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen w-full bg-gradient-to-br from-slate-100 via-white to-slate-50">
+      <Suspense fallback={null}>
+        <StartDemoFromUrl />
+      </Suspense>
       <Sidebar />
       <div className="flex w-full flex-1 flex-col min-w-0">
         <Topbar />
