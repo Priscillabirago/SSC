@@ -161,10 +161,10 @@ export function DailySummaryCard() {
                   <div className="flex items-start gap-2">
                     <Lightbulb className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
                     <div>
-                      <p className="text-xs font-semibold text-foreground mb-1">
+                      <p className="text-sm font-semibold text-foreground mb-1">
                         {isMorningContext ? "Today's Focus" : "Tomorrow's Focus"}
                       </p>
-                      <p className="text-xs text-muted-foreground leading-relaxed">
+                      <p className="text-sm text-muted-foreground leading-relaxed">
                         {summary.tomorrow_tip}
                       </p>
                     </div>

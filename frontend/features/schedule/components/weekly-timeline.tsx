@@ -891,7 +891,9 @@ export function WeeklyTimeline({ sessions, scheduleDiff }: WeeklyTimelineProps) 
             queryClient.invalidateQueries({ queryKey: ["schedule", "sessions"] });
           }}
           onFinishEarly={async (sessionId, endTime, markAs) => {
+            // Send both start_time (unchanged) and end_time so backend doesn't infer start by preserving duration
             await updateSessionApi(sessionId, {
+              start_time: sessionToAdjust!.start_time,
               end_time: endTime,
               status: markAs,
             });

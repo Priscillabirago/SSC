@@ -49,3 +49,12 @@ export async function fetchWeeklyRecap(): Promise<WeeklyRecapData> {
   return data;
 }
 
+export interface StudyingNowResponse {
+  count: number;
+}
+
+export async function fetchStudyingNow(): Promise<StudyingNowResponse> {
+  const { data } = await api.get<StudyingNowResponse>("/analytics/studying-now");
+  return data;
+}
+

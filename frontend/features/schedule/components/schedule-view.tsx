@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CalendarExportDialog } from "@/features/schedule/components/calendar-export";
+import { SharePlanButton } from "@/features/share/components/share-plan-button";
 import { MicroPlanWidget } from "@/features/schedule/components/micro-plan-widget";
 import { QuickAddTaskWidget } from "@/features/schedule/components/quick-add-task-widget";
 import { WeeklyTimeline } from "@/features/schedule/components/weekly-timeline";
@@ -219,7 +220,12 @@ export function ScheduleView() {
               </TooltipProvider>
             </div>
           )}
-          {hasSessions && <CalendarExportDialog />}
+          {hasSessions && (
+            <>
+              <SharePlanButton />
+              <CalendarExportDialog />
+            </>
+          )}
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>

@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { format } from "date-fns";
-import { LogOut, Menu } from "lucide-react";
+import { Info, LogOut, Menu } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useProfile } from "@/features/profile/hooks";
 import { useLogout } from "@/features/auth/hooks";
 import { useTodayEnergy, useUpsertEnergy } from "@/features/energy/hooks";
@@ -26,6 +27,7 @@ export function Topbar() {
   const upsertEnergy = useUpsertEnergy();
 
   const energyLevel = todayEnergy?.level ?? "medium";
+  const hasSetEnergyToday = todayEnergy != null;
 
   const handleEnergyClick = (level: "low" | "medium" | "high") => {
     const today = format(new Date(), "yyyy-MM-dd");
@@ -62,9 +64,35 @@ export function Topbar() {
           </div>
         </div>
         <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
-          <div className="flex items-center gap-1 sm:gap-2 rounded-full border border-border/60 bg-white px-2 sm:px-3 py-1">
-            <span className="text-xs font-semibold uppercase text-muted-foreground hidden sm:inline">Energy</span>
-            {energyOptions.map((option) => (
+          <TooltipProvider>
+            <div
+              className={`flex items-center gap-1 sm:gap-2 rounded-full border bg-white px-2 sm:px-3 py-1 transition-colors ${
+                hasSetEnergyToday ? "border-border/60" : "border-amber-300 bg-amber-50/50"
+              }`}
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-semibold uppercase text-muted-foreground hidden sm:inline">
+                  {hasSetEnergyToday ? "Energy" : "Set today"}
+                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="rounded-full p-0.5 text-muted-foreground hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                      aria-label="How does energy affect my schedule?"
+                    >
+                      <Info className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-[260px]">
+                    <p className="text-sm font-medium mb-1">How energy affects your schedule</p>
+                    <p className="text-xs text-muted-foreground">
+                      Lower energy → lighter sessions, fewer back-to-back blocks. Higher energy → more demanding work, longer focus blocks. Set this daily so the scheduler matches your capacity.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              {energyOptions.map((option) => (
               <button
                 key={option.value}
                 type="button"
@@ -78,7 +106,8 @@ export function Topbar() {
                 {option.label}
               </button>
             ))}
-          </div>
+            </div>
+          </TooltipProvider>
           <Badge variant="outline" className="hidden sm:inline-flex max-w-[160px] truncate">
             {profile?.timezone ?? "UTC"}
           </Badge>

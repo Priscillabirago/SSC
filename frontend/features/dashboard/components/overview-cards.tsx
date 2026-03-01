@@ -102,7 +102,7 @@ export function OverviewCards({
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-semibold text-foreground">{card.value}</div>
-            <p className="text-xs text-muted-foreground">{card.description}</p>
+            <p className="text-sm text-muted-foreground">{card.description}</p>
           </CardContent>
         </Card>
       ))}

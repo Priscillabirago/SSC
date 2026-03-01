@@ -49,7 +49,7 @@ export function TimeDistributionChart({ data }: TimeDistributionProps) {
             </UITooltip>
           </TooltipProvider>
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           {totalMinutes > 0 ? `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m total` : "Last 7 days"}
         </p>
       </div>

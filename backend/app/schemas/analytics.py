@@ -6,6 +6,10 @@ from app.schemas.session import StudySessionPublic
 from app.schemas.task import TaskPublic
 
 
+class StudyingNowResponse(BaseModel):
+    count: int
+
+
 class TrendPoint(BaseModel):
     day: date
     completed_minutes: int

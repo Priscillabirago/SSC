@@ -11,12 +11,15 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const token = getAccessToken();
-    const isAuthRoute = pathname?.startsWith("/login") || pathname?.startsWith("/register")
+    const isPublicRoute = pathname?.startsWith("/login") || pathname?.startsWith("/register")
+      || pathname?.startsWith("/forgot-password") || pathname?.startsWith("/reset-password")
+      || pathname?.startsWith("/share");
+    const isAuthOnlyRoute = pathname?.startsWith("/login") || pathname?.startsWith("/register")
       || pathname?.startsWith("/forgot-password") || pathname?.startsWith("/reset-password");
-    if (!token && !isAuthRoute) {
+    if (!token && !isPublicRoute) {
       router.replace("/login");
     }
-    if (token && isAuthRoute) {
+    if (token && isAuthOnlyRoute) {
       router.replace("/dashboard");
     }
   }, [pathname, router]);

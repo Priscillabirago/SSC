@@ -17,6 +17,7 @@ import {
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ShareAccomplishmentCard } from "@/features/dashboard/components/share-accomplishment-card";
 import { Progress } from "@/components/ui/progress";
 import { useWeeklyRecap } from "@/features/dashboard/hooks";
 import type { WeeklyRecapData } from "@/features/dashboard/api";
@@ -65,7 +66,7 @@ function StatPill({
   readonly colorClass: string;
 }) {
   return (
-    <div className="flex items-center gap-1.5 text-xs">
+    <div className="flex items-center gap-1.5 text-sm">
       <Icon className={`h-3.5 w-3.5 ${colorClass}`} />
       <span className="text-muted-foreground">{label}</span>
       <span className="font-semibold text-foreground">{value}</span>
@@ -145,14 +146,14 @@ function RecapContent({ data }: { readonly data: WeeklyRecapData }) {
         {stats && (
           <div className="grid grid-cols-2 gap-3 pl-9">
             <div className="space-y-1">
-              <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Adherence</span>
                 <span className="font-medium">{adherencePercent}%</span>
               </div>
               <Progress value={adherencePercent} className="h-1.5" />
             </div>
             <div className="space-y-1">
-              <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Hours</span>
                 <span className="font-medium">{hoursPercent}%</span>
               </div>
@@ -163,7 +164,7 @@ function RecapContent({ data }: { readonly data: WeeklyRecapData }) {
 
         {/* Highlight */}
         {data.highlight && (
-          <div className="flex items-start gap-2 pl-9 text-xs">
+          <div className="flex items-start gap-2 pl-9 text-sm">
             <Sparkles className="h-3.5 w-3.5 text-amber-500 mt-0.5 shrink-0" />
             <span className="text-foreground/80">{data.highlight}</span>
           </div>
@@ -174,7 +175,7 @@ function RecapContent({ data }: { readonly data: WeeklyRecapData }) {
           <div className="pl-9">
             <button
               onClick={() => setExpanded(!expanded)}
-              className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+              className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
               {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
               {expanded ? "Show less" : "Actions for this week"}
@@ -183,7 +184,7 @@ function RecapContent({ data }: { readonly data: WeeklyRecapData }) {
             {expanded && (
               <div className="mt-3 space-y-3">
                 {data.concern && (
-                  <div className="flex items-start gap-2 text-xs">
+                  <div className="flex items-start gap-2 text-sm">
                     <Calendar className="h-3.5 w-3.5 text-amber-600 mt-0.5 shrink-0" />
                     <span className="text-foreground/80">{data.concern}</span>
                   </div>
@@ -191,7 +192,7 @@ function RecapContent({ data }: { readonly data: WeeklyRecapData }) {
                 {data.actions && data.actions.length > 0 && (
                   <div className="space-y-2">
                     {data.actions.map((action) => (
-                      <div key={action} className="flex items-start gap-2 text-xs">
+                      <div key={action} className="flex items-start gap-2 text-sm">
                         <Lightbulb className="h-3.5 w-3.5 text-blue-500 mt-0.5 shrink-0" />
                         <span className="text-foreground/80">{action}</span>
                       </div>
@@ -235,15 +236,18 @@ export function WeeklyRecapCard() {
 
   return (
     <div className="relative">
-      <Button
-        variant="ghost"
-        size="icon"
-        className="absolute top-2 right-2 h-6 w-6 z-10 opacity-60 hover:opacity-100"
-        onClick={handleDismiss}
-        aria-label="Dismiss weekly recap"
-      >
-        <X className="h-3.5 w-3.5" />
-      </Button>
+      <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
+        <ShareAccomplishmentCard data={data} />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 opacity-60 hover:opacity-100"
+          onClick={handleDismiss}
+          aria-label="Dismiss weekly recap"
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
       <RecapContent data={data} />
     </div>
   );

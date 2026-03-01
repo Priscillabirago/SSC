@@ -128,12 +128,12 @@ export function AIInsightsCard() {
                   </div>
                   <InsightBadge type={insight.type} />
                 </div>
-                <p className="text-xs text-muted-foreground leading-relaxed">
+                <p className="text-sm text-muted-foreground leading-relaxed">
                   {insight.message}
                 </p>
                 {insight.action && (
                   <div className="pt-1">
-                    <p className="text-xs font-medium text-primary">
+                    <p className="text-sm font-medium text-primary">
                       💡 {insight.action}
                     </p>
                   </div>

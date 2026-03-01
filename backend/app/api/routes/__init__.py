@@ -6,6 +6,7 @@ from app.api.routes import (
     constraints,
     energy,
     schedule,
+    share,
     subjects,
     tasks,
     users,
@@ -23,4 +24,5 @@ api_router.include_router(schedule.router, prefix="/schedule", tags=["schedule"]
 api_router.include_router(energy.router, prefix="/energy", tags=["energy"])
 api_router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 api_router.include_router(coach.router, prefix="/coach", tags=["coach"])
+api_router.include_router(share.router, prefix="/share", tags=["share"])
 

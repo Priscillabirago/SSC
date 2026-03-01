@@ -356,7 +356,7 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   const [manageSeriesOpen, setManageSeriesOpen] = useState(false);
   const [selectedInstanceForSeries, setSelectedInstanceForSeries] = useState<Task | null>(null);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["today"]));
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["today", "recurringSeries"]));
   const [completedSectionExpanded, setCompletedSectionExpanded] = useState(true);
   const [showAllCompleted, setShowAllCompleted] = useState(false);
   
@@ -601,6 +601,9 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
     
     // Always process deadline if it's in the draft (user edited it) or if we need to clear it
     if ('deadline' in draft) {
+      // Pass draft's deadline (or task's) into payload so processDeadline can process it.
+      // Without this, payload.deadline is undefined and processDeadline incorrectly clears it.
+      payload.deadline = draft.deadline ?? task.deadline ?? null;
       processDeadline(payload, task.id);
     }
     
@@ -1211,6 +1214,12 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
   }, [tasks]);
 
   const hasActiveFilters = searchQuery || priorityFilter !== "all" || subjectFilter !== "all" || deadlineFilter !== "all";
+
+  // Recurring templates (for managing series when no instances exist yet)
+  const recurringTemplates = useMemo(
+    () => tasks.filter((t) => t.is_recurring_template),
+    [tasks]
+  );
 
   const clearFilters = () => {
     setSearchQuery("");
@@ -3173,6 +3182,67 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
             </div>
             )}
           </div>
+
+          {/* Recurring Series (manage templates when no instances exist yet) */}
+          {recurringTemplates.length > 0 && (
+            <div className="space-y-2">
+              <button
+                onClick={() => toggleSection("recurringSeries")}
+                className="flex w-full items-center justify-between rounded-lg bg-purple-50 px-3 py-2 text-left hover:bg-purple-100 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  {expandedSections.has("recurringSeries") ? (
+                    <ChevronDown className="h-4 w-4 text-purple-700" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 text-purple-700" />
+                  )}
+                  <span className="text-sm font-semibold text-purple-900">
+                    <Repeat className="h-4 w-4 inline mr-1" />
+                    Recurring series ({recurringTemplates.length})
+                  </span>
+                </div>
+              </button>
+              {expandedSections.has("recurringSeries") && (
+                <div className="space-y-2 pl-6">
+                  {recurringTemplates.map((template) => {
+                    const instanceCount = tasks.filter(
+                      (t) => t.recurring_template_id === template.id && !t.is_recurring_template
+                    ).length;
+                    return (
+                      <div
+                        key={template.id}
+                        className="flex items-center justify-between rounded-lg border border-purple-200 bg-purple-50/50 px-3 py-2"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Repeat className="h-4 w-4 text-purple-600 shrink-0" />
+                          <span className="text-sm font-medium text-foreground truncate">{template.title}</span>
+                          {instanceCount === 0 ? (
+                            <span className="text-[10px] text-purple-600 shrink-0">No instances yet</span>
+                          ) : (
+                            <span className="text-[10px] text-muted-foreground shrink-0">
+                              {instanceCount} instance{instanceCount === 1 ? "" : "s"}
+                            </span>
+                          )}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs shrink-0"
+                          onClick={() => {
+                            setSelectedInstanceForSeries(template);
+                            setManageSeriesOpen(true);
+                          }}
+                        >
+                          <Settings className="h-3 w-3 mr-1" />
+                          Manage
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
           
           {/* Grouped Task Sections */}
           {grouped.upcoming.length === 0 && (
@@ -3391,14 +3461,19 @@ export function TaskList({ tasks, subjects, initialSubjectFilter }: TaskListProp
       )}
       
       {/* Manage Series Dialog */}
-      {selectedInstanceForSeries && (
-        <ManageSeriesDialog
-          open={manageSeriesOpen}
-          onOpenChange={setManageSeriesOpen}
-          instance={selectedInstanceForSeries}
-          template={tasks.find(t => t.id === selectedInstanceForSeries.recurring_template_id && t.is_recurring_template) || null}
-        />
-      )}
+      {selectedInstanceForSeries && (() => {
+        const template = selectedInstanceForSeries.is_recurring_template
+          ? selectedInstanceForSeries
+          : (tasks.find(t => t.id === selectedInstanceForSeries.recurring_template_id && t.is_recurring_template) || null);
+        return template ? (
+          <ManageSeriesDialog
+            open={manageSeriesOpen}
+            onOpenChange={setManageSeriesOpen}
+            instance={selectedInstanceForSeries}
+            template={template}
+          />
+        ) : null;
+      })()}
     </div>
   );
 }

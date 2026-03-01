@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -18,6 +19,7 @@ from app.schemas.analytics import (
     DayAdherence,
     EnergyProductivity,
     SubjectPerformance,
+    StudyingNowResponse,
     TrendPoint,
 )
 from app.coach.factory import get_coach_adapter
@@ -26,6 +28,10 @@ from app.schemas.session import StudySessionPublic
 from app.schemas.task import TaskPublic
 
 router = APIRouter()
+
+# Cache for studying-now count (90s TTL to avoid DB hammering)
+_studying_now_cache: dict = {"count": 0, "ts": 0.0}
+STUDYING_NOW_CACHE_TTL = 90
 
 
 def _session_focus(session: StudySession) -> str | None:
@@ -197,6 +203,26 @@ def _calculate_streak_for_overview(sessions: list[StudySession], user_timezone: 
         else:
             break
     return streak
+
+
+@router.get("/studying-now", response_model=StudyingNowResponse)
+def get_studying_now(db: Session = Depends(get_db)) -> StudyingNowResponse:
+    """Public endpoint: count of users with an active (in_progress) focus session."""
+    import time
+
+    now_ts = time.time()
+    if now_ts - _studying_now_cache["ts"] < STUDYING_NOW_CACHE_TTL:
+        return StudyingNowResponse(count=_studying_now_cache["count"])
+
+    count = (
+        db.query(func.count(func.distinct(StudySession.user_id)))
+        .filter(StudySession.status == SessionStatus.IN_PROGRESS)
+        .scalar()
+        or 0
+    )
+    _studying_now_cache["count"] = count
+    _studying_now_cache["ts"] = now_ts
+    return StudyingNowResponse(count=count)
 
 
 @router.get("/overview", response_model=AnalyticsOverview)

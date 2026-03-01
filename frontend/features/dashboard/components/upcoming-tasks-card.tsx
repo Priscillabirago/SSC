@@ -442,7 +442,7 @@ export function TodayPlanCard({ todaySessions, urgentTasksCount = 0 }: TodayPlan
           </div>
         </div>
         <div className="ml-6">
-          <p className={`text-xs break-words leading-relaxed ${group === "missed" ? "text-muted-foreground/70" : "text-muted-foreground"}`}>
+          <p className={`text-sm break-words leading-relaxed ${group === "missed" ? "text-muted-foreground/70" : "text-muted-foreground"}`}>
           {session.focus || session.generated_by || "Study session"}
             {deadlineInfo && (
               <>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { X, Pause, Play, Square, Plus, SkipForward, ChevronDown, ChevronUp, Clock, Timer, Sparkles, AlertTriangle, Moon, Sun, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useFocusSession } from "@/contexts/focus-session-context";
 import { useUpdateSession } from "@/features/schedule/hooks";
+import { StudyingNowWidget } from "@/features/schedule/components/studying-now-widget";
 import { useTasks, useUpdateTask } from "@/features/tasks/hooks";
 import { useSubjects } from "@/features/subjects/hooks";
 import { toast } from "@/components/ui/use-toast";
@@ -1180,7 +1181,7 @@ export function FocusSessionView() {
             </div>
 
             {/* Quick Actions */}
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <span>Press ESC to exit</span>
               <span>•</span>
               <button
@@ -1190,6 +1191,7 @@ export function FocusSessionView() {
               >
                 {showDetails ? "Hide" : "Show"} details
               </button>
+              <StudyingNowWidget />
             </div>
           </div>
         </div>

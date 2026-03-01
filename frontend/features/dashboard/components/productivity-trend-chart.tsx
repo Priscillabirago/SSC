@@ -64,7 +64,7 @@ export function ProductivityTrendChart({ data }: TrendChartProps) {
             </UITooltip>
           </TooltipProvider>
         </div>
-        <p className="text-xs text-muted-foreground">Completed vs scheduled minutes</p>
+        <p className="text-sm text-muted-foreground">Completed vs scheduled minutes</p>
       </div>
       {data.length === 0 ? (
         <p className="text-sm text-muted-foreground">
