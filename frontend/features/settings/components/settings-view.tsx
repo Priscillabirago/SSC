@@ -575,7 +575,7 @@ export function SettingsView() {
             Start Guided Demo
           </Button>
           <p className="text-xs text-muted-foreground text-center">
-            ~3 minutes • Keyboard shortcuts available
+            ~4 minutes • Keyboard shortcuts available
           </p>
         </CardContent>
       </Card>

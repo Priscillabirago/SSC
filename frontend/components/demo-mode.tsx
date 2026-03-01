@@ -68,6 +68,22 @@ const DEMO_STEPS: DemoStep[] = [
     position: "bottom",
     duration: 5,
   },
+  {
+    id: "dashboard-energy",
+    route: "/dashboard",
+    title: "Energy Level (Top Bar)",
+    description: "Set your daily energy: Low, Medium, or High. The scheduler uses this to plan lighter or more demanding sessions. Lower energy → shorter blocks and more breaks. Higher energy → longer focus sessions. Set it each morning for better plans.",
+    position: "top",
+    duration: 6,
+  },
+  {
+    id: "dashboard-share-recap",
+    route: "/dashboard",
+    title: "Share Your Accomplishments",
+    description: "The Weekly Recap card lets you share your study stats as an image—hours studied, adherence, streak. Perfect for accountability with parents, study groups, or mentors. Download or use the native share sheet.",
+    position: "center",
+    duration: 6,
+  },
   
   // TASKS
   {
@@ -106,7 +122,7 @@ const DEMO_STEPS: DemoStep[] = [
     id: "tasks-recurring",
     route: "/tasks",
     title: "Recurring Tasks",
-    description: "For regular study commitments like 'Review lecture notes' or 'Practice problems', set up recurring tasks. They automatically regenerate based on your pattern - daily, weekly, or custom schedules.",
+    description: "For regular study commitments like 'Review lecture notes' or 'Practice problems', set up recurring tasks. They automatically regenerate based on your pattern—daily, weekly, or custom. Use the Recurring series section to manage any series, even before instances appear.",
     position: "center",
     duration: 6,
   },
@@ -160,6 +176,22 @@ const DEMO_STEPS: DemoStep[] = [
     position: "left",
     duration: 6,
   },
+  {
+    id: "schedule-share-export",
+    route: "/schedule",
+    title: "Share & Export",
+    description: "Share your schedule with a read-only link—parents, friends, or mentors can view your week without logging in. Or export to Google Calendar, Apple Calendar, or Outlook via iCal feed. Your plan, your way.",
+    position: "right",
+    duration: 6,
+  },
+  {
+    id: "schedule-focus-mode",
+    route: "/schedule",
+    title: "Focus Mode",
+    description: "Click any session to enter Focus Mode—a distraction-free timer with session prep, encouragement, and the option to adjust or finish early. See how many students are studying now for a sense of community.",
+    position: "center",
+    duration: 6,
+  },
   
   // ANALYTICS
   {
@@ -199,6 +231,14 @@ const DEMO_STEPS: DemoStep[] = [
     route: "/analytics",
     title: "Subject Performance",
     description: "Detailed metrics per subject: total time, sessions completed, average session length. Identify which subjects need more attention based on actual data, not feelings.",
+    position: "bottom",
+    duration: 6,
+  },
+  {
+    id: "analytics-energy",
+    route: "/analytics",
+    title: "Energy & Productivity",
+    description: "See how your energy levels (low, medium, high) correlate with session completion. Research shows aligning study times with your natural energy patterns improves performance. Use this to schedule important work during your peak hours.",
     position: "bottom",
     duration: 6,
   },
