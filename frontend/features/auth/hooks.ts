@@ -11,12 +11,26 @@ import { login, register } from "./api";
 type ApiError = AxiosError<{ detail?: string | { msg?: string }[] }>;
 
 function extractErrorMessage(error: unknown, fallback: string) {
-  const axiosError = error as ApiError;
-  const detail = axiosError.response?.data?.detail;
-  if (!detail) return fallback;
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail) && detail.length > 0) {
-    return detail[0]?.msg ?? fallback;
+  const axiosError = error as ApiError & { message?: string };
+  const data = axiosError.response?.data;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const obj = data as Record<string, unknown>;
+    const detail = obj.detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail) && detail.length > 0) {
+      const first = detail[0] as { msg?: string; message?: string };
+      return first?.msg ?? first?.message ?? fallback;
+    }
+    const message = obj.message;
+    if (typeof message === "string") return message;
+  }
+  // Network errors (CORS, connection refused, timeout) often have no response
+  if (!axiosError.response && axiosError.message) {
+    return `Unable to reach server: ${axiosError.message}. If using a deployed app, check that the backend URL and CORS are configured correctly.`;
+  }
+  // 5xx server errors may not include a parseable detail
+  if (axiosError.response?.status && axiosError.response.status >= 500) {
+    return "Server error. Please try again later or contact support.";
   }
   return fallback;
 }

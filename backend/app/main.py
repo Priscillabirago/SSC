@@ -22,3 +22,7 @@ app.add_middleware(
 
 app.include_router(api_router)
 
+
+def create_app():
+    """Return the FastAPI app instance (for tests)."""
+    return app

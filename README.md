@@ -59,3 +59,23 @@ Frontend: http://localhost:3000
 ### Alternative: Full setup script
 
 If you have PostgreSQL running locally, you can use `./setup-local.sh` then `./start-local.sh`. See those scripts for details.
+
+## Deploying to Render
+
+If your backend is on Render and you see `column users.plan_share_token does not exist`, the database schema is out of date. Run migrations:
+
+### Option 1: Pre-Deploy Command (recommended)
+
+Add a **Pre-Deploy Command** in your Render backend service:
+
+- **Dashboard** → Your backend service → **Settings** → **Pre-Deploy Command**
+- Set: `alembic upgrade head`
+
+Render runs this before each deploy so migrations stay in sync. (Your build/start context is already in `backend/`, so no `cd` is needed.)
+
+### Option 2: Run manually once
+
+1. Go to Render Dashboard → Your backend service → **Shell**
+2. Run: `alembic upgrade head` (or `cd backend && alembic upgrade head` if your shell starts at repo root)
+
+Ensure `DATABASE_URL` is set in Render’s environment so Alembic connects to your PostgreSQL database.

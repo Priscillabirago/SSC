@@ -79,13 +79,16 @@ export function NewTaskDialog({ subjects }: NewTaskDialogProps) {
       return undefined;
     })() : undefined;
     
-    // Prepare payload
-    const payload: any = {
-      ...form,
-      deadline,
+    // Prepare payload - only send fields the backend expects
+    const payload: Record<string, unknown> = {
+      title: form.title.trim(),
+      description: form.description?.trim() || null,
+      subject_id: form.subject_id ?? null,
+      priority: form.priority,
+      estimated_minutes: form.estimated_minutes,
+      deadline: deadline ?? null,
     };
-    
-    // Only include recurrence fields if pattern exists
+
     if (recurrencePattern) {
       payload.is_recurring_template = true;
       payload.recurrence_pattern = recurrencePattern;
