@@ -89,8 +89,12 @@ def get_shared_plan(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link not found or expired")
 
     now = datetime.now(timezone.utc)
-    if user.plan_share_expires_at and user.plan_share_expires_at < now:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link has expired")
+    expires_at = user.plan_share_expires_at
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < now:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link has expired")
 
     try:
         tz = ZoneInfo(user.timezone)
