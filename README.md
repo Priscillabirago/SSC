@@ -6,7 +6,9 @@ An AI-driven study organizer and academic coach for students. Features intellige
 
 You can also clone this repo and run it locally (see [Local Development](#local-development)).
 
-> **Note:** The live demo uses Render’s free tier for the backend. If signup or login times out on the first try, the backend may be waking from sleep (cold start). Try again in a few seconds—subsequent requests are much faster.
+> **Live demo notes:**
+> - **Cold start:** The backend uses Render’s free tier and may sleep after inactivity. If signup or login times out on the first try, try again in a few seconds.
+> - **Device:** Best experienced on desktop or laptop. Mobile and Safari may have limitations.
 
 ## Key Features
 
