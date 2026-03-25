@@ -1,9 +1,22 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Iterable, Literal, Sequence
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_tz(tz_str: str | None) -> ZoneInfo:
+    """Return ZoneInfo for the given string, falling back to UTC on bad input."""
+    if tz_str:
+        try:
+            return ZoneInfo(tz_str)
+        except Exception:
+            logger.warning("Invalid timezone %r — falling back to UTC", tz_str)
+    return ZoneInfo("UTC")
 
 from sqlalchemy.orm import Session
 
@@ -273,11 +286,11 @@ def calculate_weights(
 def _local_day_start(reference: datetime, tz_str: str) -> datetime:
     """
     Get start of day in user's timezone, returned as naive UTC datetime.
-    
+
     This returns the UTC datetime that corresponds to midnight in the user's timezone
     for the day that contains the reference time.
     """
-    tz = ZoneInfo(tz_str)
+    tz = _safe_tz(tz_str)
     # Convert reference to user's timezone
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=timezone.utc)
@@ -760,7 +773,7 @@ def build_weekly_plan(
     reference: datetime,
 ) -> WeeklyPlan:
     week_start = _local_day_start(reference, user.timezone)
-    user_tz = ZoneInfo(user.timezone)
+    user_tz = _safe_tz(user.timezone)
     plans: list[DailyPlan] = []
     
     for offset in range(7):
@@ -1024,7 +1037,7 @@ def generate_weekly_schedule(
         db.query(DailyEnergy).filter(DailyEnergy.user_id == user.id).all()
     )
     energy_map = {energy.day: energy.level for energy in energies}
-    user_tz = ZoneInfo(user.timezone)
+    user_tz = _safe_tz(user.timezone)
     weighted_tasks = calculate_weights(tasks, subjects, ref, user_tz)
     plan = build_weekly_plan(user, weighted_tasks, constraints, energy_map, ref)
     
@@ -1037,7 +1050,7 @@ def micro_plan(
     ref = reference or datetime.now(timezone.utc)
     
     # Get today in user's local timezone for energy lookup
-    user_tz = ZoneInfo(user.timezone)
+    user_tz = _safe_tz(user.timezone)
     ref_aware = ref if ref.tzinfo else ref.replace(tzinfo=timezone.utc)
     today_local = ref_aware.astimezone(user_tz).date()
     

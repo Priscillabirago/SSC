@@ -1,7 +1,10 @@
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
@@ -615,7 +618,10 @@ def _handle_recurring_task_completion(db: Session, task: Task) -> None:
             from app.services import recurring_tasks
             recurring_tasks.generate_next_instance_on_completion(db, task)
         except Exception:
-            pass
+            logger.error(
+                "Failed to generate next recurring instance for task %s (template %s)",
+                task.id, task.recurring_template_id, exc_info=True,
+            )
 
 
 def _update_task_completion_status(db: Session, task: Task, total_time: int, estimated_minutes: int) -> None:
@@ -1107,7 +1113,7 @@ def _build_ics_calendar(
     user: User,
 ) -> bytes:
     """Build an iCalendar (.ics) file from study sessions and constraints."""
-    from icalendar import Calendar, Event
+    from icalendar import Calendar, Event  # type: ignore[import-untyped]
 
     cal = Calendar()
     cal.add("prodid", "-//Smart Study Companion//SSC//EN")
@@ -1161,7 +1167,7 @@ def _build_ics_calendar(
 
 def _add_constraint_events(cal, constraint: ScheduleConstraint, user: User) -> None:
     """Add one or more iCal events for a constraint."""
-    from icalendar import Event
+    from icalendar import Event  # type: ignore[import-untyped]
     from zoneinfo import ZoneInfo
 
     type_labels = {
@@ -1186,7 +1192,7 @@ def _add_constraint_events(cal, constraint: ScheduleConstraint, user: User) -> N
 
 def _add_recurring_constraint(cal, constraint: ScheduleConstraint, summary: str, user_tz) -> None:
     """Add a recurring constraint as an iCal event with RRULE."""
-    from icalendar import Event, vRecur
+    from icalendar import Event, vRecur  # type: ignore[import-untyped]
 
     event = Event()
     event.add("uid", f"ssc-constraint-{constraint.id}@smartstudycompanion")
@@ -1231,7 +1237,7 @@ def _add_recurring_constraint(cal, constraint: ScheduleConstraint, summary: str,
 
 def _add_oneoff_constraint(cal, constraint: ScheduleConstraint, summary: str) -> None:
     """Add a one-off constraint as a single iCal event."""
-    from icalendar import Event
+    from icalendar import Event  # type: ignore[import-untyped]
 
     event = Event()
     event.add("uid", f"ssc-constraint-{constraint.id}@smartstudycompanion")

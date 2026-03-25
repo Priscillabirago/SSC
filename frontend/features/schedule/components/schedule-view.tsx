@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, RefreshCcw, Info, Sparkles, X, ListTodo } from "lucide-react";
+import { Loader2, RefreshCcw, Info, Sparkles, X, ListTodo, ChevronDown, ChevronUp } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -263,34 +263,11 @@ export function ScheduleView() {
         </div>
       </div>
       
-      {/* Schedule Updates Explanation Card */}
       {showExplanation && aiExplanation && (
-        <Card className="border-purple-200 bg-gradient-to-r from-purple-50/50 to-white">
-          <CardContent className="pt-6">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-start gap-3 flex-1">
-                <Sparkles className="h-5 w-5 text-purple-500 mt-0.5 flex-shrink-0" />
-                <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-foreground mb-1">
-                    Schedule Updates
-                  </h3>
-                  <p className="text-sm text-muted-foreground whitespace-pre-line">
-                    {aiExplanation}
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 flex-shrink-0"
-                onClick={() => setShowExplanation(false)}
-                aria-label="Dismiss explanation"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <AiExplanationCard
+          explanation={aiExplanation}
+          onDismiss={() => setShowExplanation(false)}
+        />
       )}
 
       {(isLoading || !sessions) && (
@@ -331,3 +308,107 @@ export function ScheduleView() {
   );
 }
 
+function parseExplanation(text: string): { summary: string; bullets: string[] } {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const bullets: string[] = [];
+  const summaryLines: string[] = [];
+
+  let inBullets = false;
+  for (const line of lines) {
+    const stripped = line.replace(/^[\u2022\-*]\s*/, "");
+    const isBullet = stripped !== line || line.startsWith("Key optimization");
+
+    if (line.toLowerCase().startsWith("key optimization")) {
+      inBullets = true;
+      continue;
+    }
+
+    if (inBullets || isBullet) {
+      if (stripped !== line) bullets.push(stripped);
+      inBullets = true;
+    } else {
+      summaryLines.push(line);
+    }
+  }
+
+  return {
+    summary: summaryLines.join(" "),
+    bullets,
+  };
+}
+
+interface AiExplanationCardProps {
+  readonly explanation: string;
+  readonly onDismiss: () => void;
+}
+
+function AiExplanationCard({ explanation, onDismiss }: AiExplanationCardProps) {
+  const [expanded, setExpanded] = useState(false);
+  const { summary, bullets } = parseExplanation(explanation);
+  const hasBullets = bullets.length > 0;
+
+  return (
+    <Card className="border-purple-200 bg-gradient-to-br from-purple-50/60 via-white to-purple-50/30 shadow-sm">
+      <CardContent className="pt-5 pb-4 px-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3 flex-1 min-w-0">
+            <div className="rounded-lg bg-purple-100 p-2 flex-shrink-0">
+              <Sparkles className="h-4 w-4 text-purple-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-foreground">
+                AI Optimization Insights
+              </h3>
+              <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+                {summary || explanation}
+              </p>
+
+              {hasBullets && expanded && (
+                <ul className="mt-3 space-y-2">
+                  {bullets.map((bullet) => (
+                    <li
+                      key={bullet}
+                      className="flex items-start gap-2 text-sm text-foreground/80"
+                    >
+                      <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-purple-400 flex-shrink-0" />
+                      <span className="leading-relaxed">{bullet}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {hasBullets && (
+                <button
+                  type="button"
+                  onClick={() => setExpanded((prev) => !prev)}
+                  className="mt-2 flex items-center gap-1 text-xs font-medium text-purple-600 hover:text-purple-700 transition-colors"
+                >
+                  {expanded ? (
+                    <>
+                      <ChevronUp className="h-3 w-3" />
+                      Hide details
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="h-3 w-3" />
+                      Show {bullets.length} optimization{bullets.length === 1 ? "" : "s"}
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 flex-shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={onDismiss}
+            aria-label="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}

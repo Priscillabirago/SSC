@@ -1,5 +1,11 @@
 import api from "@/lib/api-client";
 
+export interface ShareStatusResponse {
+  has_active_link: boolean;
+  url: string | null;
+  expires_at: string | null;
+}
+
 export interface ShareTokenResponse {
   url: string;
   expires_at: string | null;
@@ -24,6 +30,11 @@ export interface SharePlanPublic {
   week_start: string;
   week_end: string;
   days: ShareDayPublic[];
+}
+
+export async function getShareStatus(): Promise<ShareStatusResponse> {
+  const { data } = await api.get<ShareStatusResponse>("/share/status");
+  return data;
 }
 
 export async function createShareToken(): Promise<ShareTokenResponse> {

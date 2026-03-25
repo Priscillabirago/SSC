@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { format, subDays } from "date-fns";
 import { Calendar, ListTodo, BarChart3 } from "lucide-react";
+import { QueryErrorBanner } from "@/components/query-error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { ProductivityTrendChart } from "@/features/dashboard/components/productivity-trend-chart";
@@ -21,7 +22,7 @@ export function AnalyticsView() {
   const [startDate, setStartDate] = useState<string>(format(weekAgo, "yyyy-MM-dd"));
   const [endDate, setEndDate] = useState<string>(format(today, "yyyy-MM-dd"));
 
-  const { data: analytics, isLoading } = useDetailedAnalytics(startDate, endDate);
+  const { data: analytics, isLoading, isError, refetch } = useDetailedAnalytics(startDate, endDate);
 
   const handleRangeChange = (start: string, end: string) => {
     setStartDate(start);
@@ -30,7 +31,7 @@ export function AnalyticsView() {
 
   const hasNoData = analytics?.total_sessions === 0;
 
-  if (isLoading || !analytics) {
+  if (isLoading) {
     return (
       <div className="space-y-6">
         <Skeleton className="h-12 w-full" />
@@ -38,6 +39,10 @@ export function AnalyticsView() {
         <Skeleton className="h-96 w-full" />
       </div>
     );
+  }
+
+  if (isError || !analytics) {
+    return <QueryErrorBanner onRetry={refetch} />;
   }
 
   // Empty state

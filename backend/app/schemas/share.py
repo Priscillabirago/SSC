@@ -27,3 +27,9 @@ class SharePlanPublic(BaseModel):
 class ShareTokenResponse(BaseModel):
     url: str
     expires_at: datetime | None
+
+
+class ShareStatusResponse(BaseModel):
+    has_active_link: bool
+    url: str | None = None
+    expires_at: datetime | None = None

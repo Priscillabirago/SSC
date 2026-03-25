@@ -127,7 +127,18 @@ class OpenAICoachAdapter(CoachAdapter):
         return {"reply": reply, "plan_adjusted": False}
 
     def suggest_plan(self, user: User, context: dict[str, Any]) -> Dict[str, Any]:
-        prompt = "Review the schedule and suggest one improvement for pacing and one for focus."
+        prompt = (
+            "Give the student a quick plan check-up — 2-3 bullet-point adjustments they can act on right now.\n\n"
+            "This is a quick-glance suggestion card, NOT a conversation. Be concise.\n\n"
+            "For each adjustment:\n"
+            "- Name a specific task or session (e.g., 'Your CS130 assignment due Thursday')\n"
+            "- Say exactly what to change (e.g., 'Move it from Friday 8 PM to Wednesday 2 PM')\n"
+            "- Say why in under 10 words (e.g., 'only 1 day buffer before deadline')\n\n"
+            "DO NOT give general study advice, motivational pep talks, or tips about habits.\n"
+            "DO NOT repeat what Workload Warnings already flag (overloaded days, deadline risks).\n"
+            "Focus on sequencing and timing adjustments the student can make right now.\n\n"
+            "Write in plain language, no markdown. Each suggestion should be 1-2 sentences max."
+        )
         messages = self._build_messages(user, prompt, context)
         if not self.client:
             return self._fallback_response(
@@ -150,7 +161,8 @@ class OpenAICoachAdapter(CoachAdapter):
     ) -> Dict[str, Any]:
         prompt = (
             "Generate a short nightly reflection summary with three bullets: wins, blockers, tip. "
-            f"Wins input: {worked}\nBlockers input: {challenging}"
+            f"Wins input: {worked}\nBlockers input: {challenging}\n"
+            "Then provide ONE specific, actionable suggestion for tomorrow based on what worked and what was challenging today."
         )
         messages = self._build_messages(user, prompt, context)
         if not self.client:
@@ -163,13 +175,30 @@ class OpenAICoachAdapter(CoachAdapter):
             messages=messages,
             temperature=0.3,
         )
-        reply = completion.choices[0].message.content
-        return {"summary": reply, "suggestion": "Keep the next day light for the first block."}
+        reply = completion.choices[0].message.content or ""
+        lines = [line.strip() for line in reply.strip().splitlines() if line.strip()]
+        if len(lines) >= 2:
+            summary = "\n".join(lines[:-1])
+            suggestion = lines[-1]
+        elif len(lines) == 1:
+            summary = lines[0]
+            suggestion = "Plan your first task tonight so you can start fresh tomorrow."
+        else:
+            summary = reply.strip()
+            suggestion = "Plan your first task tonight so you can start fresh tomorrow."
+        return {"summary": summary, "suggestion": suggestion}
 
     def micro_plan(
         self, user: User, minutes: int, context: dict[str, Any]
     ) -> Dict[str, Any]:
-        prompt = f"Create a micro plan for the next {minutes} minutes using urgent tasks and energy cues."
+        prompt = (
+            f"The student has {minutes} minutes available right now. "
+            "Based on their current tasks, energy level, and priorities, give a brief motivational rationale "
+            "for how to best use this time.\n\n"
+            "- Name the specific task(s) they should focus on and why\n"
+            "- Suggest one concrete technique (e.g., active recall, Pomodoro, outline-first)\n"
+            "- Keep it to 3-4 sentences, plain language, no markdown"
+        )
         messages = self._build_messages(user, prompt, context)
         if not self.client:
             return self._fallback_response(
@@ -314,42 +343,41 @@ Simple task: {{"tips": [], "strategy": "Quick Task", "rationale": "This is a str
         upcoming_count = analytics_context.get("upcoming_tasks_count", 0)
         weekly_hours = analytics_context.get("user_weekly_hours", 10)
         
-        prompt = f"""You are a supportive, insightful academic coach analyzing a student's dashboard data. Provide personalized feedback, motivation, and actionable recommendations.
+        prompt = f"""You are analyzing a student's dashboard to surface trends and patterns they might miss on their own.
 
-Student Context:
+Student Data:
 - Weekly study goal: {weekly_hours} hours
-- Current adherence rate: {adherence:.0%} (vs previous: {prev_adherence:.0%}, change: {adherence_change:+.0%})
+- Adherence: {adherence:.0%} (previous: {prev_adherence:.0%}, change: {adherence_change:+.0%})
 - Focus streak: {streak} days
 - Tasks: {completed_tasks}/{total_tasks} completed, {upcoming_count} upcoming
-- Time distribution: {', '.join([f"{subj}: {mins//60}h {mins%60}m" for subj, mins in list(subject_time.items())[:5]]) if subject_time else "No data yet"}
+- Time by subject: {', '.join([f"{subj}: {mins//60}h {mins%60}m" for subj, mins in list(subject_time.items())[:5]]) if subject_time else "No data yet"}
 
-Your role:
-1. Be a personal companion: supportive, honest, and motivational
-2. Celebrate wins genuinely (don't overdo it)
-3. Identify patterns and provide constructive feedback
-4. Give 2-4 specific, actionable insights
-5. Include one motivational message that feels personal
+YOUR SCOPE — focus on multi-day trends, habit patterns, and subject balance:
+- Which subjects are getting too much or too little time relative to each other?
+- Is their streak building or did it recently break? What does that signal?
+- Is adherence trending up, down, or flat? What's driving the change?
+- Are upcoming tasks front-loaded or spread out?
+
+DO NOT cover these (other features handle them):
+- Do NOT summarize today's sessions or give a daily recap (the Daily Summary does that)
+- Do NOT give a weekly total or week-by-week comparison (the Weekly Recap does that)
+- Do NOT flag overloaded days or deadline risks (Workload Warnings does that)
+
+Give 2-4 insights. Each must reference a specific number, subject, or pattern from the data above.
 
 Insight types:
-- "celebration": Genuine wins (e.g., "You've completed 5 days in a row!")
-- "warning": Areas needing attention (e.g., "Your Monday completion rate is 30%")
-- "recommendation": Actionable advice (e.g., "Try shorter 30-min sessions on Mondays")
-- "observation": Interesting patterns (e.g., "You're most productive in the morning")
+- "celebration": A genuine win backed by data (e.g., "Your CS130 time doubled this week — that consistency is paying off")
+- "warning": Something that needs attention (e.g., "General tasks are eating 60% of your time while Math gets 10%")
+- "recommendation": One concrete action (e.g., "Swap one General session for Math tomorrow to rebalance")
+- "observation": A pattern (e.g., "Your adherence jumps 20% on weeks you study before noon")
 
-Requirements:
-- Be specific and data-driven
-- Use a warm, encouraging tone
-- Balance critique with motivation
-- Make insights actionable
-- Keep each insight concise (1-2 sentences)
-
-Return JSON format:
+Return JSON:
 {{
   "insights": [
-    {{"type": "celebration|warning|recommendation|observation", "title": "Short title", "message": "Detailed message", "action": "Optional actionable step"}},
+    {{"type": "celebration|warning|recommendation|observation", "title": "Short title", "message": "Specific message with data", "action": "One concrete step or null"}},
     ...
   ],
-  "motivational_message": "A personal, encouraging message (1-2 sentences)",
+  "motivational_message": "One personal, encouraging sentence that references their actual data",
   "overall_tone": "positive|neutral|needs_attention"
 }}"""
 
@@ -463,7 +491,7 @@ Return JSON format:
         tasks_summary = schedule_context.get("tasks_summary", "")
         constraints_summary = schedule_context.get("constraints_summary", "")
         
-        prompt = f"""Review this weekly study schedule and suggest optimizations for real-world efficiency.
+        prompt = f"""Review this study schedule and suggest optimizations the student wouldn't think of themselves.
 
 Current Schedule:
 {schedule_summary}
@@ -474,51 +502,47 @@ Tasks Overview:
 Constraints:
 {constraints_summary}
 
-User Preferences:
-- Weekly goal: {user.weekly_study_hours} hours
-- Max session length: {user.max_session_length} minutes
-- Break duration: {user.break_duration} minutes
-- Preferred study windows: {', '.join([str(w) for w in (user.preferred_study_windows or [])])}
+Preferences:
+- Weekly goal: {user.weekly_study_hours}h | Max session: {user.max_session_length}min | Break: {user.break_duration}min
+- Study windows: {', '.join([str(w) for w in (user.preferred_study_windows or [])])}
 
-Historical Patterns (learned from past behavior):
-{self._format_historical_patterns(schedule_context.get("historical_patterns", {})) or "No historical data yet - will learn from your patterns over time"}
+Historical Patterns:
+{self._format_historical_patterns(schedule_context.get("historical_patterns", {})) or "No historical data yet"}
 
-Focus on making the schedule MORE REALISTIC for everyday student life, using historical patterns to inform suggestions:
-1. **Workload Balancing**: Ensure study hours are distributed evenly across days (avoid overloaded days)
-2. **Circadian Matching**: Match difficult tasks to high-energy times (morning for most people)
-3. **Buffer Time**: Suggest adding 5-10 minute buffers between sessions for transitions
-4. **Realistic Pacing**: Avoid back-to-back intense sessions; mix light and heavy work
-5. **Deadline Pressure**: Prioritize urgent tasks but don't create burnout days
-6. **Subject Variety**: Ensure good interleaving to prevent monotony
+IMPORTANT — The student already sees Workload Warnings that flag these issues:
+- Overloaded days, unscheduled tasks, deadline risks, burnout risk, deadline clusters
+DO NOT repeat any of those. They are already handled.
 
-Return a JSON object with:
+YOUR SCOPE — focus on things the warnings DON'T cover:
+1. Session ordering: Is a hard subject scheduled right after another hard one? Should lighter work come first as a warm-up?
+2. Circadian matching: Using historical patterns, are difficult tasks at the wrong time of day for this student?
+3. Transitions: Are there back-to-back sessions with no break? Suggest specific buffer times.
+4. Subject interleaving: Is the same subject crammed into one day? Spacing it across days improves retention.
+5. Pacing within a day: 3 intense sessions in a row will cause fatigue — suggest alternating heavy and light.
+
+For each optimization, name the specific session(s), day, and time. No vague advice.
+
+Return JSON:
 {{
   "optimizations": [
     {{
-      "type": "workload_balance" | "circadian_match" | "buffer_time" | "pacing" | "deadline" | "variety",
-      "day": "Monday" | "Tuesday" | ... | null (if applies to multiple days),
-      "description": "Specific, actionable explanation with concrete examples (e.g., 'Monday has 6.5 hours while Tuesday has 1.5 hours - this creates burnout risk')",
-      "sessions_to_adjust": [session_index1, session_index2, ...] (optional, 0-indexed),
+      "type": "session_order|circadian_match|buffer_time|pacing|interleaving",
+      "day": "Monday" | null,
+      "description": "Specific observation with names and times (e.g., 'Tuesday has CS130 at 9 AM followed by Math at 9:30 AM — both are high-difficulty. Insert a 10-min break or swap Math to the afternoon slot.')",
+      "sessions_to_adjust": [0, 1],
       "suggested_changes": {{
-        "move_to_day": "Tuesday" (optional),
-        "move_to_time": "14:00" (optional, HH:MM format),
-        "add_buffer_before": true (optional),
-        "split_into_sessions": [duration1, duration2] (optional, in minutes)
+        "move_to_day": "Tuesday",
+        "move_to_time": "14:00",
+        "add_buffer_before": true,
+        "split_into_sessions": [30, 30]
       }}
     }}
   ],
-  "explanation": "Detailed, specific explanation (2-4 sentences) that includes: 1) Concrete metrics (e.g., 'Monday has 6.5h vs Tuesday's 1.5h'), 2) Specific task examples (e.g., 'Math homework at 7 AM is too early'), 3) Actionable insights (e.g., 'Moving 2 hours from Monday to Tuesday would balance workload'). Be specific with numbers, task names, and times.",
-  "overall_impact": "positive" | "neutral" | "needs_attention"
+  "explanation": "2-3 sentences summarizing the key improvements. Reference specific sessions, times, and subjects. Example: 'Your Wednesday has CS130, Math, and Physics back-to-back from 9-12 with no breaks — that is 3 hours of hard subjects in a row. Adding a 10-min buffer after CS130 and swapping Physics to Thursday afternoon would improve focus and retention.'",
+  "overall_impact": "positive|neutral|needs_attention"
 }}
 
-Requirements for explanation:
-- Include specific numbers (hours, session counts, time differences)
-- Mention specific tasks or subjects when relevant
-- Explain WHY each optimization matters for real student life
-- Be actionable - tell the user what was optimized and why it helps
-
-Be practical and realistic. Only suggest changes that genuinely improve everyday usability.
-If the schedule is already well-optimized, provide a specific positive explanation with metrics (e.g., 'Your schedule is well-balanced: average 3.2h/day with only 0.8h variation')."""
+If the schedule already has good pacing and variety, say so with specifics (e.g., "Sessions are well-spaced with 15-min gaps and subjects alternate between heavy and light")."""
 
         messages = self._build_messages(user, prompt, context)
         
@@ -565,24 +589,28 @@ If the schedule is already well-optimized, provide a specific positive explanati
         tasks_count = len(completed_tasks)
         hours = total_minutes / 60
         
-        prompt = f"""Generate a brief, encouraging end-of-day summary for a student. Be specific, warm, and actionable.
+        prompt = f"""Write a quick end-of-day recap for a student. Focus ONLY on what happened today — no weekly totals, no adherence percentages, no streak mentions.
 
 Today's Activity:
-- Completed {sessions_count} study session(s) ({hours:.1f} hours total)
+- Completed {sessions_count} study session(s) totaling {hours:.1f} hours
 - Finished {tasks_count} task(s)
 - Energy level: {energy_level}
-- Upcoming tomorrow: {len(tasks_tomorrow)} task(s) due
+- Tomorrow: {len(tasks_tomorrow)} task(s) due
 
-Your role:
-1. Celebrate what was accomplished (be genuine, not overdone)
-2. Note any patterns (e.g., "You were most productive in the morning")
-3. Provide one specific tip for tomorrow based on today's performance
-4. Keep it concise (2-3 sentences for summary, 1 sentence for tomorrow's tip)
+YOUR SCOPE — today only:
+1. What did they accomplish today? Name specific sessions or tasks if possible.
+2. How did their energy level affect what they got done?
+3. Give ONE specific, practical tip for tomorrow that connects to today's results.
+   Good: "You finished 3 sessions before noon — try front-loading tomorrow too since you have {len(tasks_tomorrow)} tasks due."
+   Bad: "Keep up the good work!" (too generic)
+   Bad: "Your weekly adherence is 80%." (wrong scope — that's for Dashboard Insights)
 
-Return JSON format:
+Keep the summary to 2-3 sentences and the tip to 1 sentence. Be warm but specific.
+
+Return JSON:
 {{
-  "summary": "Brief narrative summary of the day (2-3 sentences)",
-  "tomorrow_tip": "One actionable tip for tomorrow based on today's patterns",
+  "summary": "What happened today in 2-3 specific sentences",
+  "tomorrow_tip": "One concrete tip for tomorrow that references today's data",
   "tone": "positive|neutral|encouraging"
 }}"""
 
@@ -747,30 +775,41 @@ def _generate_weekly_recap_impl(
 
     adherence_trend = _format_adherence_trend(adherence, prev_adherence)
 
-    prompt = f"""Generate a personalized weekly study recap for this student. Be VERY specific — reference actual days, subjects, numbers, and patterns. No generic advice.
+    prompt = f"""Generate a weekly study recap. This is the student's end-of-week review — focus on week-level patterns, day-by-day breakdowns, and what to change next week.
 
 WEEKLY DATA:
 - Sessions: {completed} completed, {partial} partial, {skipped} skipped out of {total_sessions} total
-- Study time: {total_hours:.1f} hours (target: {target_hours} hours)
+- Study time: {total_hours:.1f}h (target: {target_hours}h)
 - Adherence: {adherence:.0f}%. {adherence_trend}
-- Current streak: {streak} day(s)
-- Tasks completed this week: {tasks_completed}
-- Overdue tasks: {tasks_overdue}
-- Best day: {best_day}
-- Weakest day: {worst_day}
+- Streak: {streak} day(s)
+- Tasks completed: {tasks_completed} | Overdue: {tasks_overdue}
+- Best day: {best_day} | Weakest day: {worst_day}
 - Most productive time: {best_time_of_day}
-- Subjects studied: {subjects_str}
+- Subjects: {subjects_str}
 
 DAY-BY-DAY:
 {day_detail_str}
 
 {skipped_str}
 
-RULES:
-1. "recap" — 3-4 sentences summarizing the week. Reference specific days, subjects, and numbers. Mention what went well AND what didn't.
-2. "highlight" — The single best thing they did this week (be specific: "You nailed your Wednesday math sessions" not "Great job").
-3. "concern" — The biggest issue to address (be honest: "You skipped every Friday session" not "Consider being more consistent"). Null if nothing concerning.
-4. "actions" — Array of 2-3 SPECIFIC actions for next week. Not "study more" but "Schedule your {worst_day} sessions 30 minutes later — you skipped all 3 this week, possibly because they were too early."
+YOUR SCOPE — week-level analysis only:
+- Compare days against each other (e.g., "Monday and Wednesday carried the week while Thursday-Friday had zero sessions")
+- Identify which subjects got attention vs which were neglected
+- Spot the specific day/time patterns that drove success or failure
+- Give actions tied to next week's specific schedule
+
+DO NOT cover these (other features handle them):
+- Do NOT repeat daily summaries (the Daily Summary already covered each day)
+- Do NOT give general habit advice or subject balance observations (Dashboard Insights does that)
+- Do NOT flag deadline risks or workload imbalance (Workload Warnings does that)
+
+OUTPUT RULES:
+1. "recap" — 3-4 sentences. Must reference specific days, subjects, and numbers. Compare this week to target.
+2. "highlight" — The single best thing. Be specific: "You completed all 3 Wednesday sessions including the 90-min Math block" not "Great job this week."
+3. "concern" — The biggest issue. Be honest: "You skipped every Friday session — that's {skipped} missed hours" not "Try to be more consistent." Null if genuinely nothing concerning.
+4. "actions" — 2-3 actions for NEXT week. Each must name a specific day, time, or subject.
+   Good: "Move your {worst_day} sessions to after lunch — you completed 0 morning sessions that day but finished all afternoon ones."
+   Bad: "Try to study more consistently." (too vague)
 5. "tone" — "celebratory" if adherence > 80%, "encouraging" if 50-80%, "honest" if < 50%
 
 Return JSON:
@@ -808,12 +847,15 @@ Return JSON:
     elif hasattr(adapter, "model") and adapter.model:
         try:
             import json as json_mod
-            system_msg = adapter._build_system_prompt(user, context)
-            result = adapter.model.generate_content(
-                [system_msg, prompt],
-                generation_config={"temperature": 0.6, "response_mime_type": "application/json"},
-            )
-            parsed = json_mod.loads(result.text)
+            full_prompt = adapter._prepare_prompt(user, prompt, context)
+            result = adapter.model.generate_content(full_prompt)
+            reply = result.text
+            json_start = reply.find("{")
+            json_end = reply.rfind("}") + 1
+            if json_start >= 0 and json_end > json_start:
+                parsed = json_mod.loads(reply[json_start:json_end])
+            else:
+                return fallback
             return {
                 "recap": parsed.get("recap", fallback["recap"]),
                 "highlight": parsed.get("highlight", fallback["highlight"]),

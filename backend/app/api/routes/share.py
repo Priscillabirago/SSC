@@ -10,7 +10,7 @@ from app.api import deps
 from app.db.session import get_db
 from app.models.study_session import StudySession
 from app.models.user import User
-from app.schemas.share import ShareDayPublic, SharePlanPublic, ShareSessionPublic, ShareTokenResponse
+from app.schemas.share import ShareDayPublic, SharePlanPublic, ShareSessionPublic, ShareStatusResponse, ShareTokenResponse
 
 router = APIRouter()
 
@@ -45,6 +45,29 @@ def _get_base_url_for_share() -> str:
     """Return the frontend base URL for constructing share links."""
     import os
     return os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
+
+@router.get("/status", response_model=ShareStatusResponse)
+def get_share_status(
+    current_user: User = Depends(deps.get_current_user),  # noqa: B008 # NOSONAR
+) -> ShareStatusResponse:
+    """Return the current share-link status for the authenticated user."""
+    token = current_user.plan_share_token
+    expires_at = current_user.plan_share_expires_at
+
+    if not token:
+        return ShareStatusResponse(has_active_link=False)
+
+    now = datetime.now(timezone.utc)
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < now:
+            return ShareStatusResponse(has_active_link=False)
+
+    base_url = _get_base_url_for_share()
+    url = f"{base_url.rstrip('/')}/share/{token}"
+    return ShareStatusResponse(has_active_link=True, url=url, expires_at=expires_at)
 
 
 @router.post("", response_model=ShareTokenResponse)

@@ -1,6 +1,6 @@
 "use client";
 
-import { GraduationCap, LineChart, ListCheck, MessageSquare, Settings, Timer } from "lucide-react";
+import { BookOpen, GraduationCap, LineChart, ListCheck, MessageSquare, Settings, Timer } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -11,6 +11,7 @@ const links = [
   { href: "/tasks", label: "Subjects & Tasks", icon: ListCheck },
   { href: "/schedule", label: "Scheduler", icon: Timer },
   { href: "/analytics", label: "Analytics", icon: LineChart },
+  { href: "/journal", label: "Study Journal", icon: BookOpen },
   { href: "/coach", label: "AI Coach", icon: MessageSquare },
   { href: "/settings", label: "Settings", icon: Settings }
 ];

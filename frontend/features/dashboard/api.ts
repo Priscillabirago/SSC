@@ -58,3 +58,33 @@ export async function fetchStudyingNow(): Promise<StudyingNowResponse> {
   return data;
 }
 
+export interface Badge {
+  id: string;
+  name: string;
+  description: string;
+  category: "consistency" | "planning" | "focus" | "reflection";
+  earned: boolean;
+  progress: number;
+  threshold: number;
+}
+
+export interface BadgesResponse {
+  badges: Badge[];
+  earned_count: number;
+  total_count: number;
+}
+
+export async function fetchBadges(): Promise<BadgesResponse> {
+  const { data } = await api.get<BadgesResponse>("/analytics/badges");
+  return data;
+}
+
+export interface OnboardingStatus {
+  completed: boolean;
+}
+
+export async function fetchOnboardingStatus(): Promise<OnboardingStatus> {
+  const { data } = await api.get<OnboardingStatus>("/users/onboarding-status");
+  return data;
+}
+

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchAnalyticsOverview, fetchDashboardInsights, fetchWeeklyRecap, fetchStudyingNow } from "./api";
+import { fetchAnalyticsOverview, fetchBadges, fetchDashboardInsights, fetchOnboardingStatus, fetchWeeklyRecap, fetchStudyingNow } from "./api";
 
 export function useAnalyticsOverview() {
   return useQuery({
@@ -29,8 +29,24 @@ export function useStudyingNow() {
   return useQuery({
     queryKey: ["analytics", "studying-now"],
     queryFn: fetchStudyingNow,
-    staleTime: 1000 * 60, // 1 min — backend caches 90s
-    refetchInterval: 1000 * 90, // Refetch every 90s when visible
+    staleTime: 1000 * 60,
+    refetchInterval: 1000 * 90,
+  });
+}
+
+export function useBadges() {
+  return useQuery({
+    queryKey: ["analytics", "badges"],
+    queryFn: fetchBadges,
+    staleTime: 1000 * 60 * 5,
+  });
+}
+
+export function useOnboardingStatus() {
+  return useQuery({
+    queryKey: ["users", "onboarding-status"],
+    queryFn: fetchOnboardingStatus,
+    staleTime: 1000 * 60 * 10,
   });
 }
 

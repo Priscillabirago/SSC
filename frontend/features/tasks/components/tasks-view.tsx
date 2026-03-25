@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Info, Calendar, BookOpen, Plus, Check, ArrowRight, X } from "lucide-react";
+import { QueryErrorBanner } from "@/components/query-error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -29,8 +30,8 @@ const SUBJECT_TEMPLATES = [
 
 export function TasksView() {
   const router = useRouter();
-  const { data: subjects, isLoading: loadingSubjects } = useSubjects();
-  const { data: tasks, isLoading: loadingTasks } = useTasks();
+  const { data: subjects, isLoading: loadingSubjects, isError: subjectsError, refetch: refetchSubjects } = useSubjects();
+  const { data: tasks, isLoading: loadingTasks, isError: tasksError, refetch: refetchTasks } = useTasks();
   const createSubject = useCreateSubject();
   const { data: sessions } = useSessions();
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | "all">("all");
@@ -71,12 +72,20 @@ export function TasksView() {
     return counts;
   }, [tasks, subjects]);
 
-  if (loadingSubjects || !subjects || loadingTasks || !tasks) {
+  if (loadingSubjects || loadingTasks) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-16 w-full" />
         <Skeleton className="h-96 w-full" />
       </div>
+    );
+  }
+
+  if (subjectsError || tasksError || !subjects || !tasks) {
+    return (
+      <QueryErrorBanner
+        onRetry={() => { refetchSubjects(); refetchTasks(); }}
+      />
     );
   }
 

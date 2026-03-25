@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.db.session import get_db
+from app.models.daily_reflection import DailyReflection
 from app.models.study_session import SessionStatus, StudySession
 from app.models.subject import Subject
 from app.models.task import Task
@@ -1150,4 +1151,244 @@ def get_weekly_recap(
         "week_start": weekly_context["week_start"],
         "week_end": weekly_context["week_end"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Badges — computed on the fly from existing data, no new tables
+# ---------------------------------------------------------------------------
+
+_BADGE_DEFINITIONS = [
+    {
+        "id": "steady_start",
+        "name": "Steady Start",
+        "description": "Complete 3 study sessions",
+        "category": "consistency",
+        "threshold": 3,
+        "metric": "completed_sessions",
+    },
+    {
+        "id": "week_warrior",
+        "name": "Week Warrior",
+        "description": "Reach a 7-day study streak",
+        "category": "consistency",
+        "threshold": 7,
+        "metric": "streak",
+    },
+    {
+        "id": "unstoppable",
+        "name": "Unstoppable",
+        "description": "Reach a 30-day study streak",
+        "category": "consistency",
+        "threshold": 30,
+        "metric": "streak",
+    },
+    {
+        "id": "first_plan",
+        "name": "First Plan",
+        "description": "Generate your first weekly schedule",
+        "category": "planning",
+        "threshold": 1,
+        "metric": "schedules_generated",
+    },
+    {
+        "id": "planner_pro",
+        "name": "Planner Pro",
+        "description": "Generate 10 weekly schedules",
+        "category": "planning",
+        "threshold": 10,
+        "metric": "schedules_generated",
+    },
+    {
+        "id": "deep_focus",
+        "name": "Deep Focus",
+        "description": "Complete 10 focus sessions",
+        "category": "focus",
+        "threshold": 10,
+        "metric": "completed_sessions",
+    },
+    {
+        "id": "century",
+        "name": "Century",
+        "description": "Log 100 total study hours",
+        "category": "focus",
+        "threshold": 100,
+        "metric": "total_hours",
+    },
+    {
+        "id": "self_aware",
+        "name": "Self-Aware",
+        "description": "Submit 5 daily reflections",
+        "category": "reflection",
+        "threshold": 5,
+        "metric": "reflections",
+    },
+]
+
+
+def _max_streak(sessions: list[StudySession], user_timezone: str) -> int:
+    """Return the longest streak ever achieved (days with 30+ min completed)."""
+    try:
+        tz = ZoneInfo(user_timezone)
+    except Exception:
+        tz = ZoneInfo("UTC")
+
+    daily_minutes: dict[date, int] = defaultdict(int)
+    for s in sessions:
+        if s.status not in (SessionStatus.COMPLETED, SessionStatus.PARTIAL):
+            continue
+        local_day = _normalize_to_utc(s.start_time).astimezone(tz).date()
+        mins = max(int((s.end_time - s.start_time).total_seconds() // 60), 0)
+        daily_minutes[local_day] += mins
+
+    qualifying_days = sorted(d for d, m in daily_minutes.items() if m >= 30)
+    if not qualifying_days:
+        return 0
+
+    best = 1
+    run = 1
+    for i in range(1, len(qualifying_days)):
+        if qualifying_days[i] - qualifying_days[i - 1] == timedelta(days=1):
+            run += 1
+            best = max(best, run)
+        else:
+            run = 1
+    return best
+
+
+def _compute_badge_metrics(
+    db: Session, user_id: int, user_timezone: str
+) -> dict[str, float]:
+    """Gather all raw numbers needed to evaluate badges."""
+    sessions = (
+        db.query(StudySession)
+        .filter(StudySession.user_id == user_id)
+        .all()
+    )
+
+    completed = [s for s in sessions if s.status == SessionStatus.COMPLETED]
+    completed_count = len(completed)
+
+    total_minutes = sum(
+        max((s.end_time - s.start_time).total_seconds() / 60, 0)
+        for s in completed
+    )
+    total_hours = total_minutes / 60
+
+    best_streak = _max_streak(sessions, user_timezone)
+
+    schedule_dates = (
+        db.query(func.date(StudySession.created_at))
+        .filter(
+            StudySession.user_id == user_id,
+            StudySession.generated_by == "scheduler",
+        )
+        .distinct()
+        .count()
+    )
+
+    reflection_count = (
+        db.query(func.count(DailyReflection.id))
+        .filter(DailyReflection.user_id == user_id)
+        .scalar()
+    ) or 0
+
+    return {
+        "completed_sessions": completed_count,
+        "total_hours": total_hours,
+        "streak": best_streak,
+        "schedules_generated": schedule_dates,
+        "reflections": reflection_count,
+    }
+
+
+@router.get("/badges")
+def get_badges(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict:
+    """Return badge progress computed from existing data."""
+    metrics = _compute_badge_metrics(db, current_user.id, current_user.timezone)
+
+    badges = []
+    for defn in _BADGE_DEFINITIONS:
+        current_value = metrics.get(defn["metric"], 0)
+        threshold = defn["threshold"]
+        earned = current_value >= threshold
+        badges.append({
+            "id": defn["id"],
+            "name": defn["name"],
+            "description": defn["description"],
+            "category": defn["category"],
+            "earned": earned,
+            "progress": min(current_value, threshold),
+            "threshold": threshold,
+        })
+
+    earned_count = sum(1 for b in badges if b["earned"])
+    return {"badges": badges, "earned_count": earned_count, "total_count": len(badges)}
+
+
+@router.get("/study-journal")
+def get_study_journal(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict:
+    """Return session notes and daily reflections in a unified chronological list."""
+    subjects_by_id: dict[int, str] = {
+        s.id: s.name
+        for s in db.query(Subject).filter(Subject.user_id == current_user.id).all()
+    }
+
+    sessions = (
+        db.query(StudySession)
+        .filter(
+            StudySession.user_id == current_user.id,
+            StudySession.notes.isnot(None),
+            StudySession.notes != "",
+        )
+        .order_by(StudySession.start_time.desc())
+        .limit(200)
+        .all()
+    )
+
+    reflections = (
+        db.query(DailyReflection)
+        .filter(DailyReflection.user_id == current_user.id)
+        .order_by(DailyReflection.day.desc())
+        .limit(200)
+        .all()
+    )
+
+    entries: list[dict] = []
+
+    for sess in sessions:
+        duration = int((sess.end_time - sess.start_time).total_seconds() / 60)
+        entries.append({
+            "type": "session_note",
+            "date": sess.start_time.date().isoformat(),
+            "timestamp": sess.start_time.isoformat(),
+            "subject": subjects_by_id.get(sess.subject_id) if sess.subject_id else None,
+            "duration_minutes": duration,
+            "energy_level": sess.energy_level,
+            "content": sess.notes,
+        })
+
+    for ref in reflections:
+        entries.append({
+            "type": "reflection",
+            "date": ref.day.isoformat(),
+            "timestamp": ref.created_at.isoformat() if ref.created_at else f"{ref.day.isoformat()}T00:00:00",
+            "subject": None,
+            "duration_minutes": None,
+            "energy_level": None,
+            "content": None,
+            "worked": ref.worked,
+            "challenging": ref.challenging,
+            "summary": ref.summary,
+            "suggestion": ref.suggestion,
+        })
+
+    entries.sort(key=lambda e: e["timestamp"], reverse=True)
+
+    return {"entries": entries, "total": len(entries)}
 

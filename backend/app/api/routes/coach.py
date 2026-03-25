@@ -39,6 +39,16 @@ from app.services.scheduling import micro_plan
 router = APIRouter()
 
 
+def _clean_markdown(text: str) -> str:
+    """Remove heavy markdown formatting but preserve bullet-point structure."""
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)
+    text = re.sub(r'^[\s]*[•*]\s+', '- ', text, flags=re.MULTILINE)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 @router.post("/chat", response_model=CoachChatResponse)
 def coach_chat(
     payload: CoachChatRequest,
@@ -51,17 +61,7 @@ def coach_chat(
     reply = response.get("reply", "Let's keep making progress!")
     cleaned_reply, memory_payloads = _extract_memory_blocks(reply)
     
-    # Also remove any markdown formatting that might have slipped through
-    # Remove markdown headers (###, ##, #)
-    cleaned_reply = re.sub(r'^#{1,6}\s+', '', cleaned_reply, flags=re.MULTILINE)
-    # Remove bold/italic markdown (**text**, *text*)
-    cleaned_reply = re.sub(r'\*\*([^*]+)\*\*', r'\1', cleaned_reply)
-    cleaned_reply = re.sub(r'\*([^*]+)\*', r'\1', cleaned_reply)
-    # Remove markdown list markers at start of lines (-, *, •)
-    cleaned_reply = re.sub(r'^[\s]*[-*•]\s+', '', cleaned_reply, flags=re.MULTILINE)
-    # Clean up extra whitespace
-    cleaned_reply = re.sub(r'\n{3,}', '\n\n', cleaned_reply)
-    cleaned_reply = cleaned_reply.strip()
+    cleaned_reply = _clean_markdown(cleaned_reply)
     
     coach_service.log_memory(
         db,
@@ -98,19 +98,7 @@ def coach_suggest_plan(
     response = adapter.suggest_plan(current_user, context)
     reply = response.get("reply", "")
     
-    # Clean markdown from reply
-    cleaned_reply = reply
-    if cleaned_reply:
-        # Remove markdown headers (###, ##, #)
-        cleaned_reply = re.sub(r'^#{1,6}\s+', '', cleaned_reply, flags=re.MULTILINE)
-        # Remove bold/italic markdown (**text**, *text*)
-        cleaned_reply = re.sub(r'\*\*([^*]+)\*\*', r'\1', cleaned_reply)
-        cleaned_reply = re.sub(r'\*([^*]+)\*', r'\1', cleaned_reply)
-        # Remove markdown list markers at start of lines (-, *, •)
-        cleaned_reply = re.sub(r'^[\s]*[-*•]\s+', '', cleaned_reply, flags=re.MULTILINE)
-        # Clean up extra whitespace
-        cleaned_reply = re.sub(r'\n{3,}', '\n\n', cleaned_reply)
-        cleaned_reply = cleaned_reply.strip()
+    cleaned_reply = _clean_markdown(reply) if reply else reply
     
     highlights = response.get("highlights") or []
     # Only use auto-generated highlights if AI provided them

@@ -10,19 +10,23 @@ import { ProductivityTrendChart } from "@/features/dashboard/components/producti
 import { TimeDistributionChart } from "@/features/dashboard/components/time-distribution-chart";
 import { TodayPlanCard } from "@/features/dashboard/components/upcoming-tasks-card";
 import { AIInsightsCard } from "@/features/dashboard/components/ai-insights-card";
+import { BadgesCard } from "@/features/dashboard/components/badges-card";
 import { GettingStartedGuide } from "@/features/dashboard/components/getting-started-guide";
 import { DailySummaryCard } from "@/features/dashboard/components/daily-summary-card";
 import { WeeklyRecapCard } from "@/features/dashboard/components/weekly-recap-card";
-import { useAnalyticsOverview } from "@/features/dashboard/hooks";
+import { useAnalyticsOverview, useOnboardingStatus } from "@/features/dashboard/hooks";
 import { useSessions, useGenerateSchedule } from "@/features/schedule/hooks";
+import { QueryErrorBanner } from "@/components/query-error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/use-toast";
 
 export function DashboardView() {
   const router = useRouter();
-  const { data: analytics, isLoading: loadingAnalytics } = useAnalyticsOverview();
+  const { data: analytics, isLoading: loadingAnalytics, isError, refetch } = useAnalyticsOverview();
   const { data: sessions } = useSessions();
+  const { data: onboarding } = useOnboardingStatus();
   const generateSchedule = useGenerateSchedule();
+  const showGuide = onboarding ? !onboarding.completed : false;
 
   const todaySessions = useMemo(() => {
     if (!sessions) return [];
@@ -53,13 +57,17 @@ export function DashboardView() {
     });
   };
 
-  if (loadingAnalytics || !analytics) {
+  if (loadingAnalytics) {
     return (
       <div className="grid gap-6">
         <Skeleton className="h-32 w-full" />
         <Skeleton className="h-96 w-full" />
       </div>
     );
+  }
+
+  if (isError || !analytics) {
+    return <QueryErrorBanner onRetry={refetch} />;
   }
 
   // Empty state
@@ -106,7 +114,7 @@ export function DashboardView() {
         </div>
 
         {/* Getting Started Guide */}
-        <GettingStartedGuide />
+        {showGuide && <GettingStartedGuide />}
 
         {/* Welcome Message */}
         <div className="text-center py-8">
@@ -123,7 +131,7 @@ export function DashboardView() {
   return (
     <div className="space-y-6">
       {/* Getting Started Guide - Show at top if not completed */}
-      <GettingStartedGuide />
+      {showGuide && <GettingStartedGuide />}
       
       {/* Daily Summary - Show in the morning */}
       <DailySummaryCard />
@@ -180,6 +188,7 @@ export function DashboardView() {
         />
         <AIInsightsCard />
       </div>
+      <BadgesCard />
     </div>
   );
 }

@@ -37,9 +37,16 @@ export function Topbar() {
         onSuccess: () => {
           toast({
             title: "Energy updated",
-            description: `We'll plan with ${level} energy in mind.`
+            description: `We'll plan with ${level} energy in mind.`,
           });
-        }
+        },
+        onError: () => {
+          toast({
+            variant: "destructive",
+            title: "Couldn't save energy level",
+            description: "Please try again in a moment.",
+          });
+        },
       }
     );
   };

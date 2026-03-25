@@ -45,6 +45,7 @@ export function FocusSessionView() {
   const encouragementTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastPomodoroPhaseRef = useRef<"work" | "break" | null>(null);
+  const shownMilestonesRef = useRef<Set<number>>(new Set());
 
   // Get task and subject details - prioritize fresh data from query over snapshot
   const task = (state.session?.task_id ? tasks?.find((t) => t.id === state.session?.task_id) : null) || state.task || null;
@@ -354,14 +355,14 @@ export function FocusSessionView() {
     );
   }, [state.session, updateSession, stopSession, router]);
 
-  // Fetch encouragement messages periodically
+  // Fetch encouragement messages at milestones (once per milestone)
   useEffect(() => {
     if (state.isActive && !state.isPaused && task) {
-      // Fetch encouragement at milestones (25%, 50%, 75%)
       const milestones = [25, 50, 75];
       const currentMilestone = milestones.find(m => progressPercent >= m && progressPercent < m + 5);
       
-      if (currentMilestone && encouragementMessage === null) {
+      if (currentMilestone && !shownMilestonesRef.current.has(currentMilestone)) {
+        shownMilestonesRef.current.add(currentMilestone);
         fetchEncouragement.mutate({
           elapsed_minutes: elapsedMinutes,
           remaining_minutes: remainingMinutes,
@@ -372,12 +373,12 @@ export function FocusSessionView() {
         }, {
           onSuccess: (data) => {
             setEncouragementMessage(data.message);
-            setTimeout(() => setEncouragementMessage(null), 5000);
+            setTimeout(() => setEncouragementMessage(null), 8000);
           },
         });
       }
     }
-  }, [state.isActive, state.isPaused, progressPercent, task, elapsedMinutes, remainingMinutes, state.pomodoroCount, encouragementMessage, fetchEncouragement]);
+  }, [state.isActive, state.isPaused, progressPercent, task, elapsedMinutes, remainingMinutes, state.pomodoroCount, fetchEncouragement]);
 
   // Soft lock: Handle navigation attempts
   useEffect(() => {

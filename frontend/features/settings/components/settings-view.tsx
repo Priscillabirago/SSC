@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, X, Clock, Mail, Lock, KeyRound, Play } from "lucide-react";
+import { Plus, X, Clock, Mail, Lock, KeyRound, Play, Share2, Link2, Link2Off, Copy, ExternalLink, Loader2, Download } from "lucide-react";
 import { useDemoMode } from "@/contexts/demo-mode-context";
 import {
   getNotificationsEnabled,
@@ -28,6 +28,8 @@ import { toast } from "@/components/ui/use-toast";
 import { StudyWindow, StudyWindowConfig, CustomTimeRange, UserProfile } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 import { changePassword, resetPassword, changeEmail } from "@/features/auth/api";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { getShareStatus, createShareToken, revokeShareToken } from "@/features/share/api";
 import { ConstraintsManager } from "@/features/constraints/components/constraints-manager";
 
 const timezones = [
@@ -520,6 +522,10 @@ export function SettingsView() {
         </Card>
 
         <NotificationSettings />
+
+        <ShareLinkManagement />
+
+        <DataExport />
         
         {/* Blocked Times / Constraints */}
         <ConstraintsManager />
@@ -927,6 +933,158 @@ function AccountManagementSection({ profile }: AccountManagementSectionProps) {
   );
 }
 
+function ShareLinkManagement() {
+  const queryClient = useQueryClient();
+  const { data: status, isLoading } = useQuery({
+    queryKey: ["share-status"],
+    queryFn: getShareStatus,
+  });
+
+  const createLink = useMutation({
+    mutationFn: createShareToken,
+    onSuccess: async (data) => {
+      queryClient.invalidateQueries({ queryKey: ["share-status"] });
+      try {
+        await navigator.clipboard.writeText(data.url);
+        toast({ title: "Link created & copied", description: "Your shareable link has been copied to the clipboard." });
+      } catch {
+        toast({ title: "Link created", description: data.url });
+      }
+    },
+    onError: () => {
+      toast({ variant: "destructive", title: "Failed to create link", description: "Please try again." });
+    },
+  });
+
+  const revokeLink = useMutation({
+    mutationFn: revokeShareToken,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["share-status"] });
+      toast({ title: "Link revoked", description: "The share link has been deactivated. Anyone with the old link will no longer be able to view your plan." });
+    },
+    onError: () => {
+      toast({ variant: "destructive", title: "Failed to revoke link", description: "Please try again." });
+    },
+  });
+
+  const handleCopyLink = async () => {
+    if (!status?.url) return;
+    try {
+      await navigator.clipboard.writeText(status.url);
+      toast({ title: "Link copied", description: "Share link copied to clipboard." });
+    } catch {
+      toast({ title: "Share link", description: status.url });
+    }
+  };
+
+  const isActive = status?.has_active_link ?? false;
+  const isBusy = createLink.isPending || revokeLink.isPending;
+
+  const renderBody = () => {
+    if (isLoading) {
+      return (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Checking share status...
+        </div>
+      );
+    }
+
+    if (isActive) {
+      return (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2">
+            <Link2 className="h-4 w-4 text-green-600 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-green-800">Active link</p>
+              {status?.expires_at && (
+                <p className="text-xs text-green-600">
+                  Expires {new Date(status.expires_at).toLocaleDateString()}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 gap-1.5"
+              onClick={handleCopyLink}
+            >
+              <Copy className="h-3.5 w-3.5" />
+              Copy link
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 gap-1.5"
+              onClick={() => {
+                if (status?.url) globalThis.window?.open(status.url, "_blank");
+              }}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open
+            </Button>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 gap-1.5"
+              onClick={() => createLink.mutate()}
+              disabled={isBusy}
+            >
+              {createLink.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+              Regenerate
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              className="flex-1 gap-1.5"
+              onClick={() => revokeLink.mutate()}
+              disabled={isBusy}
+            >
+              {revokeLink.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2Off className="h-3.5 w-3.5" />}
+              Revoke
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <Button
+        className="w-full gap-2"
+        onClick={() => createLink.mutate()}
+        disabled={isBusy}
+      >
+        {createLink.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+        Create share link
+      </Button>
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Share2 className="h-5 w-5" />
+          Share Link
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Create a read-only link so parents, friends, or mentors can view your weekly study plan.
+        </p>
+        {renderBody()}
+        <p className="text-xs text-muted-foreground">
+          Links expire after 7 days. Revoking a link immediately prevents access.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 function NotificationSettings() {
   const [enabled, setEnabled] = useState(false);
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">("unsupported");
@@ -985,6 +1143,75 @@ function NotificationSettings() {
             onCheckedChange={handleToggle}
           />
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DataExport() {
+  const [downloading, setDownloading] = useState(false);
+
+  async function handleExport() {
+    setDownloading(true);
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const token =
+        globalThis.window === undefined
+          ? null
+          : globalThis.window.localStorage.getItem("ssc.accessToken");
+
+      const res = await fetch(`${baseUrl}/users/export`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
+      if (!res.ok) throw new Error("Export failed");
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download =
+        res.headers.get("content-disposition")?.match(/filename="(.+)"/)?.[1] ??
+        "ssc-export.json";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      toast({ title: "Export downloaded", description: "Your data has been saved as a JSON file." });
+    } catch {
+      toast({ title: "Export failed", description: "Could not download your data. Please try again.", variant: "destructive" });
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Download className="h-5 w-5" />
+          Your Data
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Download all your data — tasks, study sessions, reflections, and settings — as a JSON file you can keep as a backup.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleExport}
+          disabled={downloading}
+          className="gap-2"
+        >
+          {downloading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Download className="h-4 w-4" />
+          )}
+          {downloading ? "Downloading…" : "Download my data"}
+        </Button>
       </CardContent>
     </Card>
   );

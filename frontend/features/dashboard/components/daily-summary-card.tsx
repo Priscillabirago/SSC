@@ -113,11 +113,6 @@ export function DailySummaryCard() {
     return false;
   }, [summary]);
 
-  // Don't show if conditions aren't met
-  if (!shouldShow || !summary) {
-    return null;
-  }
-
   if (isLoading) {
     return (
       <Card className="border-primary/20 bg-gradient-to-r from-primary/5 to-primary/10">
@@ -128,8 +123,7 @@ export function DailySummaryCard() {
     );
   }
 
-  // TypeScript guard: summary is guaranteed to be defined here
-  if (!summary) {
+  if (!shouldShow || !summary) {
     return null;
   }
 

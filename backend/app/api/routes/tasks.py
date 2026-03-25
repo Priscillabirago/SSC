@@ -345,7 +345,10 @@ def _sync_status_with_is_completed(
             try:
                 recurring_tasks.generate_next_instance_on_completion(db, task)
             except Exception:
-                pass
+                logger.error(
+                    "Failed to generate next recurring instance for task %s (template %s)",
+                    task.id, task.recurring_template_id, exc_info=True,
+                )
     elif task.is_completed and status_value != TaskStatus.COMPLETED.value and status_value != "completed":
         task.is_completed = False
         # Clear completed_at when unmarking as complete
