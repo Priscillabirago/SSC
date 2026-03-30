@@ -10,3 +10,5 @@ bcrypt
 openai
 google-generativeai
 icalendar
+pytest
+httpx

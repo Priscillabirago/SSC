@@ -4,7 +4,8 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import json
-import pytest
+
+import pytest  # pyright: ignore[reportMissingImports]
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
@@ -106,6 +107,7 @@ def test_build_coach_context_includes_recent_activity(monkeypatch: pytest.Monkey
     db_session.flush()
 
     completed_task.updated_at = base_naive
+    completed_task.completed_at = base_naive
 
     completed_session = StudySession(
         user_id=user.id,
@@ -225,18 +227,20 @@ def test_adapter_prompts_include_context_lines():
     messages = openai_adapter._build_messages(user, "Help me plan", context)
     system_content = messages[0]["content"]
 
-    assert "single-sentence headline" in system_content
-    assert "Wins – include only" in system_content
-    assert "Blockers – include only" in system_content
+    assert "Smart Study Companion" in system_content
     assert "Action items:" in system_content
     assert "Completed today: Essay draft" in system_content
-    assert "Sessions today: Essay draft / History (completed)" in system_content
+    assert (
+        "Completed sessions today (work done, tasks may still be in progress):"
+        in system_content
+    )
+    assert "Essay draft / History (session completed)" in system_content
     assert "Due tomorrow: Lab report (high)" in system_content
     assert "Latest reflection: Great focus | Tip: Take a short walk" in system_content
 
     gemini_adapter = GeminiCoachAdapter(api_key=None)
     gemini_prompt = gemini_adapter._prepare_prompt(user, "Assist me", context)
-    assert "headline → optional Wins section" in gemini_prompt
+    assert "Distinguish between completed SESSIONS and completed TASKS" in gemini_prompt
     assert "Action items:" in gemini_prompt
     assert "Completed today: Essay draft" in gemini_prompt
     assert "Due tomorrow: Lab report (high)" in gemini_prompt

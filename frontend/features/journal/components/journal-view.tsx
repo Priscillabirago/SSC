@@ -23,10 +23,13 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorBanner } from "@/components/query-error-banner";
+import {
+  collectJournalSubjects,
+  filterJournalEntries,
+  type JournalTypeFilter,
+} from "@/lib/journal-filters";
 import { useStudyJournal } from "../hooks";
 import type { JournalEntry } from "../api";
-
-type TypeFilter = "all" | "session_note" | "reflection";
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -144,25 +147,17 @@ function ReflectionCard({ entry }: { readonly entry: JournalEntry }) {
 
 export function JournalView() {
   const { data, isLoading, isError, refetch } = useStudyJournal();
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [typeFilter, setTypeFilter] = useState<JournalTypeFilter>("all");
   const [subjectFilter, setSubjectFilter] = useState<string>("all");
 
   const subjects = useMemo(() => {
     if (!data) return [];
-    const set = new Set<string>();
-    for (const e of data.entries) {
-      if (e.subject) set.add(e.subject);
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
+    return collectJournalSubjects(data.entries);
   }, [data]);
 
   const filtered = useMemo(() => {
     if (!data) return [];
-    return data.entries.filter((e) => {
-      if (typeFilter !== "all" && e.type !== typeFilter) return false;
-      if (subjectFilter !== "all" && e.subject !== subjectFilter) return false;
-      return true;
-    });
+    return filterJournalEntries(data.entries, typeFilter, subjectFilter);
   }, [data, typeFilter, subjectFilter]);
 
   const grouped = useMemo(() => groupByDate(filtered), [filtered]);
@@ -204,7 +199,7 @@ export function JournalView() {
           <Filter className="h-4 w-4 text-muted-foreground" />
           <Select
             value={typeFilter}
-            onValueChange={(v) => setTypeFilter(v as TypeFilter)}
+            onValueChange={(v) => setTypeFilter(v as JournalTypeFilter)}
           >
             <SelectTrigger className="w-[160px] h-9">
               <SelectValue />

@@ -1,0 +1,5 @@
+[tool.pyright]
+include = ["app", "tests"]
+# Do not pin venv here — let the IDE’s selected Python (e.g. conda or .venv) drive
+# import resolution so devDependencies like pytest resolve when installed there.
+reportMissingImports = true

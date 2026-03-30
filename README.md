@@ -49,6 +49,13 @@ uvicorn app.main:app --reload --port 8000
 
 API docs: http://localhost:8000/docs
 
+**Backend tests** (from `backend/`; uses a local SQLite file under `tests/.pytest_ssc.sqlite`, ignored by git):
+
+```bash
+pip install -r requirements.txt
+python -m pytest tests/ -v
+```
+
 ### 2. Frontend Setup
 
 Create `frontend/.env.local` with `NEXT_PUBLIC_API_URL=http://localhost:8000` for local backend.

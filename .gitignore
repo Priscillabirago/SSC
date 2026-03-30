@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+backend/tests/.pytest_ssc.sqlite
 .venv/
 
 # Node

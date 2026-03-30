@@ -18,6 +18,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { selectVisibleBadges } from "@/lib/badge-visibility";
 import { useBadges } from "../hooks";
 import type { Badge } from "../api";
 
@@ -98,21 +99,6 @@ function BadgeItem({ badge }: Readonly<{ badge: Badge }>) {
       </Tooltip>
     </TooltipProvider>
   );
-}
-
-function selectVisibleBadges(badges: Badge[]): Badge[] {
-  const earned = badges.filter((b) => b.earned);
-  const unearned = badges.filter((b) => !b.earned);
-
-  if (unearned.length === 0) return earned;
-
-  const nextUp = unearned.reduce((closest, b) => {
-    const closestPct = closest.progress / closest.threshold;
-    const bPct = b.progress / b.threshold;
-    return bPct > closestPct ? b : closest;
-  }, unearned[0]);
-
-  return [...earned, nextUp];
 }
 
 export function BadgesCard() {

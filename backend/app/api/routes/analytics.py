@@ -1,5 +1,6 @@
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
@@ -206,8 +207,8 @@ def _calculate_streak_for_overview(sessions: list[StudySession], user_timezone: 
     return streak
 
 
-@router.get("/studying-now", response_model=StudyingNowResponse)
-def get_studying_now(db: Session = Depends(get_db)) -> StudyingNowResponse:
+@router.get("/studying-now")
+def get_studying_now(db: Annotated[Session, Depends(get_db)]) -> StudyingNowResponse:
     """Public endpoint: count of users with an active (in_progress) focus session."""
     import time
 
@@ -228,8 +229,8 @@ def get_studying_now(db: Session = Depends(get_db)) -> StudyingNowResponse:
 
 @router.get("/overview", response_model=AnalyticsOverview)
 def get_overview(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(deps.get_current_user)],
 ) -> AnalyticsOverview:
     now = datetime.now(timezone.utc)
     seven_days_ago = now - timedelta(days=7)
@@ -525,8 +526,8 @@ def _build_analytics_context(
 
 @router.get("/insights", response_model=DashboardInsightsResponse)
 def get_dashboard_insights(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(deps.get_current_user)],
 ) -> DashboardInsightsResponse:
     """Generate AI-powered personalized insights for the dashboard."""
     from app.models.daily_energy import DailyEnergy
@@ -787,10 +788,10 @@ def _calculate_productivity_trend_for_range(
 
 @router.get("/detailed", response_model=DetailedAnalytics)
 def get_detailed_analytics(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(deps.get_current_user)],
     start_date: date | None = None,
     end_date: date | None = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
 ) -> DetailedAnalytics:
     """
     Get detailed analytics with subject performance, energy correlation, and day adherence.
@@ -1109,8 +1110,8 @@ def _build_weekly_recap_context(
 
 @router.get("/weekly-recap")
 def get_weekly_recap(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(deps.get_current_user)],
 ) -> dict:
     """Generate AI-powered weekly recap for the previous week."""
     weekly_context = _build_weekly_recap_context(db, current_user)
@@ -1303,8 +1304,8 @@ def _compute_badge_metrics(
 
 @router.get("/badges")
 def get_badges(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(deps.get_current_user)],
 ) -> dict:
     """Return badge progress computed from existing data."""
     metrics = _compute_badge_metrics(db, current_user.id, current_user.timezone)
@@ -1330,8 +1331,8 @@ def get_badges(
 
 @router.get("/study-journal")
 def get_study_journal(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(deps.get_current_user)],
 ) -> dict:
     """Return session notes and daily reflections in a unified chronological list."""
     subjects_by_id: dict[int, str] = {

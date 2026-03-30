@@ -472,19 +472,31 @@ def _normalize_to_utc(dt: datetime | None) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
+def _instance_deadline_date(task: Task) -> date | None:
+    if not task.deadline:
+        return None
+    dt = task.deadline
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).date()
+
+
 def _check_instance_exists(db: Session, template: Task, next_date: datetime) -> bool:
-    """Check if an instance already exists for the given date."""
-    next_date_only = next_date.date()
-    existing = db.query(Task).filter(
-        Task.recurring_template_id == template.id,
-        Task.user_id == template.user_id,
-    ).first()
-    
-    if existing and existing.deadline:
-        existing_date = existing.deadline.date()
-        if existing_date == next_date_only:
+    """Return True if an instance for this template already has the same deadline calendar day."""
+    next_date_only = next_date.astimezone(timezone.utc).date()
+    instances = (
+        db.query(Task)
+        .filter(
+            Task.recurring_template_id == template.id,
+            Task.user_id == template.user_id,
+        )
+        .all()
+    )
+    for t in instances:
+        d = _instance_deadline_date(t)
+        if d is not None and d == next_date_only:
             return True
-    return existing is not None
+    return False
 
 
 def _create_task_instance(template: Task, deadline: datetime) -> Task:

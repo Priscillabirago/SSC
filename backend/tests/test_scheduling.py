@@ -69,6 +69,41 @@ def test_calculate_weights_prioritizes_deadlines():
 
 
 def test_interleave_subjects_alternates_focus():
+    """With task_priorities, swaps a later block to break same-subject adjacency."""
+    reference = datetime.now(timezone.utc)
+    sessions = [
+        StudyBlock(
+            start_time=reference,
+            end_time=reference,
+            subject_id=1,
+            task_id=1,
+            focus="A",
+            energy_level="medium",
+        ),
+        StudyBlock(
+            start_time=reference,
+            end_time=reference,
+            subject_id=1,
+            task_id=2,
+            focus="B",
+            energy_level="medium",
+        ),
+        StudyBlock(
+            start_time=reference,
+            end_time=reference,
+            subject_id=2,
+            task_id=3,
+            focus="C",
+            energy_level="medium",
+        ),
+    ]
+    priorities = {1: "MEDIUM", 2: "MEDIUM", 3: "MEDIUM"}
+    reordered = interleave_subjects(sessions.copy(), priorities)
+    assert reordered[0].subject_id == 1
+    assert reordered[1].subject_id == 2
+
+
+def test_interleave_subjects_no_priorities_returns_unchanged():
     reference = datetime.now(timezone.utc)
     sessions = [
         StudyBlock(
@@ -82,21 +117,12 @@ def test_interleave_subjects_alternates_focus():
         StudyBlock(
             start_time=reference,
             end_time=reference,
-            subject_id=1,
+            subject_id=2,
             task_id=None,
             focus="B",
             energy_level="medium",
         ),
-        StudyBlock(
-            start_time=reference,
-            end_time=reference,
-            subject_id=2,
-            task_id=None,
-            focus="C",
-            energy_level="medium",
-        ),
     ]
-    reordered = interleave_subjects(sessions.copy())
-    assert reordered[0].subject_id == 1
-    assert reordered[1].subject_id == 2
+    out = interleave_subjects(sessions.copy(), None)
+    assert out == sessions
 
